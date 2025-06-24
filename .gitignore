@@ -1,0 +1,8 @@
+/__pycache__
+/cache/tatoclip/
+/cache/reminders.json
+/cache/userData.json
+/logs/
+*.pyc
+token.yaml
+/.idea
