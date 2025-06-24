@@ -1,3 +1,5 @@
+GENERATED HELP PAGE:
+
 # **clip**
 Add/edit video clips. Usage:
 `[clip] <video index> <timestamp> <duration>` (sets video index)

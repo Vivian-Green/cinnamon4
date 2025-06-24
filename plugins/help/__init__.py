@@ -62,21 +62,45 @@ async def help_command(message):
         await message.channel.send(f"Unknown command '{words[1]}'. Available options:\n{formatted_commands}\n\nOr use `/help all` to see all help messages.")
 
 has_dumped_help = False
+
+
 def dump_help_to_md(help_str):
     global has_dumped_help
-    if has_dumped_help: return False
+    if has_dumped_help:
+        return False
     has_dumped_help = True
 
     current_file_dir = os.path.dirname(os.path.abspath(__file__))
     parent_parent_dir = os.path.dirname(os.path.dirname(current_file_dir))
+
+    readme_path = os.path.join(parent_parent_dir, 'README.md')
+    help_content = f"GENERATED HELP PAGE FROM PLUGINS:\n\n{help_str}"
+
     help_file_path = os.path.join(parent_parent_dir, 'help.md')
+    try:
+        with open(help_file_path, 'w', encoding='utf-8') as f:
+            f.write(help_content.strip())
+    except Exception as e:
+        print(f"Failed to create help file: {e}")
+        return False
 
-    # Write the help string to the file
-    with open(help_file_path, 'w', encoding='utf-8') as f:
-        f.write(help_str)
+    if os.path.exists(readme_path):
+        with open(readme_path, 'r', encoding='utf-8') as f:
+            readme_content = f.read()
 
-    print(f"Help file created at: {help_file_path}")
-    return True
+        # Check if the marker exists in readme.md
+        marker_pos = readme_content.find("GENERATED HELP PAGE")
+        if marker_pos != -1:
+            # Keep content before marker and append new help content
+            new_content = readme_content[:marker_pos] + help_content
+
+            # Write updated README
+            with open(readme_path, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+        else:
+            print("couldn't find help page preamble in README.md, ")
+        return True
+    return False
 
 def bind_commands():
     return {
