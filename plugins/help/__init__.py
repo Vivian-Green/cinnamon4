@@ -74,7 +74,7 @@ def dump_help_to_md(help_str):
     parent_parent_dir = os.path.dirname(os.path.dirname(current_file_dir))
 
     readme_path = os.path.join(parent_parent_dir, 'README.md')
-    help_content = f"GENERATED HELP PAGE FROM PLUGINS:\n\n{help_str}"
+    help_content = f"GENERATED HELP PAGE FROM PLUGINS:\n\n{help_str}".replace("# ", "### ")
 
     help_file_path = os.path.join(parent_parent_dir, 'help.md')
     try:
