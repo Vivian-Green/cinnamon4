@@ -95,8 +95,21 @@ def bind_phrases():
         "/roll": rollWrapper
     }
 
-
 def bind_commands():
     return {
         "roll": rollWrapper
+    }
+
+def bind_help():
+    return {
+        "roll": "Rolls dice with various options. Usage: \n"
+        "`/roll XdY` - Rolls X Y-sided dice (e.g. `/roll 3d6` rolls three 6-sided dice)\n"
+        "`/roll dY` - Rolls one Y-sided die (e.g. `/roll d20` rolls one 20-sided die)\n"
+        "`/roll XdY adv` - Rolls with advantage (rolls twice, takes higher)\n"
+        "`/roll XdY dis` - Rolls with disadvantage (rolls twice, takes lower)\n"
+        "\n"
+        "Notes:\n"
+        "- Default is 1d20 if no parameters given\n"
+        "- For multiple dice, shows average, min, and max results\n"
+        "- D10 rolls are mapped to 0-9, not 1-10\n"
     }

@@ -341,7 +341,7 @@ async def handleReminderReaction(reaction, user):
 
         await message.channel.send(f"{user.mention}, you've been {addedOrRemoved} from the reminder!")
         overwriteCache("reminders.json", reminders)
-    elif "snooze" in lowerContent: # todo: options for 15m, 30m, 1h.
+    elif "snooze" in lowerContent:
         # find line starting with "> ", get everything after the second character
         # make a reminder for this, for half an hour from now
         reminderText = "default text :3"
@@ -364,3 +364,20 @@ def bind_reactions():
 
 def bind_loop():
     return checkForReminders
+
+def bind_help():
+    return {
+        "reminders": "Manage your active reminders. Usage:\n"
+                    "`!>reminders` - Lists all your upcoming reminders\n\n"
+                    "- Shows time remaining, text for each reminder\n"
+                    "- React with 🇦, 🇧, 🇨 etc. to delete reminders\n",
+        "reminder": "Set a new reminder with flexible time formats. Usage:\n"
+                    "`!>reminder <time> <message>`\n\n"
+                    "Time formats supported:\n"
+                    "• Relative: `30m`, `2h15m`, `1d6h`, `3w`, `1y`\n"
+                    "• Timestamp: `<t:1625097600>` (Unix timestamp)\n\n"
+                    "Examples:\n"
+                    "`!>reminder 45m Check laundry`\n"
+                    "`!>reminder 2d4h Check very slow laundry`\n"
+                    "`!>reminder <t:1735689600> New Year's Eve!`"
+    }

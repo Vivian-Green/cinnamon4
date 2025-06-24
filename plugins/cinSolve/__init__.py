@@ -107,3 +107,15 @@ def bind_commands():
     return {
         "solve": solve_command
     }
+
+def bind_help():
+    return {
+        "solve": "Occasionally convenient calculator. Usage:\n"
+                 "`/solve <expression>` or `!>solve <expression>`\n\n"
+                 "- Supports standard math operations (+-*/%), sin, cos, sqrt, pow, etc.)\n"
+                 "Examples:\n"
+                 "`/solve 2*(3+5)` → `16`\n"
+                 "`/solve sqrt(2**8)` → `16`\n"
+                 "`/solve sin(pi/2)` → `1.0`\n\n"
+                 "alias: cinnamon, eval(<expression>)",
+    }

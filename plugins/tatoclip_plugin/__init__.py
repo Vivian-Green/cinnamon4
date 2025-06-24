@@ -438,7 +438,6 @@ def bind_phrases():
         "*": clip
     }
 
-
 def bind_commands():
     return {
         "setclipfile": setclipfile,
@@ -446,4 +445,38 @@ def bind_commands():
         "getclips": getClips,
         "getallclips": getAllClips,
         "renderclips": renderClips,
+    }
+
+
+def bind_help():
+    return {
+        "setclipfile": "Initialize or configure clip settings. Usage:\n"
+                       "`!>setclipfile [filename.json] [playlist_url]`\n\n"
+                       "• Creates new config if file doesn't exist\n"
+                       "• Auto-matches similar filenames\n"
+                       "• Defaults to `targets_[channelname].json`\n\n"
+                       "Example:\n"
+                       "`!>setclipfile targets_tutorials.json https://youtube.com/playlist?list=...`",
+
+        "clip": "Add/edit video clips. Usage:\n"
+                "`[clip] <video index> <timestamp> <duration>` (sets video index)\n"
+                "`[clip] <timestamp> <duration>` (uses previous video index)\n"
+                "`clip toggle` - Toggle clipping mode (whether \"clip\" command is needed)\n\n"
+
+                "- Timestamp format: `HH:MM:SS` or `MM:SS`\n"
+                "- Set duration to 0 to delete a clip\n"
+                "- autocorrects ; to :\n"
+                "Examples:\n"
+                "`clip 3 1:30 15` (index 3 at 1m30s for 15s)\n"
+                "`2;45 10` (last index at 2m45s for 10s, with clipping mode enabled)\n"
+                "`clip toggle` (enable/disable clipping mode)",
+
+        "getclips": "View clips for specific video. Usage:\n"
+                    "`!>getclips <index>`\n\n",
+
+        "getallclips": "View all clips in playlist with total runtime calculation. Usage:\n"
+                       "`!>getallclips`\n\n",
+
+        "renderclips": "Start rendering process. Usage:\n"
+                       "`!>renderclips [start_index] [end_index]`\n\n"
     }

@@ -44,6 +44,7 @@ os.system("color")
 commands: Dict[str, Callable] = {}
 phrases: Dict[str, Callable] = {}
 reactionhandlers: Dict[str, Callable] = {}
+help_strings: Dict[str, str] = {}
 loopfunctions = []
 
 client = discord.Client(intents=discord.Intents.all(), max_messages=100)
@@ -119,6 +120,8 @@ async def handleCommand(message):
             except Exception as e:
                 printErr(f"err in {func}: {e}")
             return
+
+# !!!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[STATUS]
 
 lastStatusUpdateTime = 0
 async def handleStatusUpdate():
@@ -258,6 +261,13 @@ def load_plugins():
                 printLabelWithInfo("    reaction handlers:", reactionhandler)
             else:
                 printErr(f"bind_reactions() in plugin {plugin_dir} returned invalid data? {phrase_dict}")
+
+        if hasattr(module, "bind_help"):
+            plugin_help = module.bind_help()
+            if isinstance(plugin_help, dict):
+                help_strings.update(plugin_help)
+            else:
+                printErr(f"bind_help() in plugin {plugin_dir} returned invalid data? {plugin_help}")
 
         if hasattr(module, "bind_loop"):
             loopy = module.bind_loop()
