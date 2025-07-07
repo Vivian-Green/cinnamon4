@@ -260,7 +260,7 @@ def load_plugins():
                 reactionhandlers.update(reactionhandler)
                 printLabelWithInfo("    reaction handlers:", reactionhandler)
             else:
-                printErr(f"bind_reactions() in plugin {plugin_dir} returned invalid data? {phrase_dict}")
+                printErr(f"bind_reactions() in plugin {plugin_dir} returned invalid data? {reactionhandler}")
 
         if hasattr(module, "bind_help"):
             plugin_help = module.bind_help()

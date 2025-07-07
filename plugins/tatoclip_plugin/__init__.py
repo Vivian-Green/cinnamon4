@@ -3,6 +3,8 @@ import json
 import difflib
 import time
 import subprocess
+import traceback
+
 from pytube import Playlist
 
 import cinIO
@@ -10,10 +12,41 @@ from cinIO import loadCache
 from cinLogging import printLabelWithInfo
 
 clip_file_names = {}
-lastVideoIndex = 0
+lastVideoIndex = 1
 
 get_links_memo = {}
 trust_links_memo_timestamp = 0
+
+# todo: update to use metadata version 1
+# todo: handle cases where get_links( returns false
+# old:
+# {
+# "https://www.youtube.com/watch?v=rLw2ndAW9NE&list=PLenI3Kbdx0D19iGG1nElWVp0GpI-cUHMQ": [
+#    {
+#        "prefix": "Part ",
+#        "name": "example",... [name optional]
+#    },
+#       {data},
+#       {data},...
+#   ]
+# }
+# new:
+# [
+#   {
+#       "prefix": "Part ",
+#       "version": 1,
+#       "name": "example", [name required]
+#       "url": "https://www.youtube.com...list=..."
+#   },
+#   {
+#       "0:00": 5,
+#       "1:23": 30,...
+#   },
+#   {data},
+#   {data},
+# ]
+
+# todo: snake_case function namessssss
 
 def getDefaultCache():
     return {
@@ -30,6 +63,38 @@ tatoclip_py_path = tatoclip_config["tatoclip.py_path"]
 trust_cache_time_seconds = tatoclip_config["trust_cache_time_seconds"]
 
 
+def validate_project_file(data):
+    """Validate the structure of a project/targets JSON file."""
+    if not isinstance(data, dict):
+        return False, "Root element must be a dictionary"
+
+    if len(data) == 0:
+        return True, "Empty file is valid for initialization"
+
+    # Check each URL entry in the file
+    for url, videos in data.items():
+        if not isinstance(videos, list):
+            return False, f"Videos for URL {url} must be a list"
+
+        if len(videos) == 0:
+            continue
+
+        # First item should be metadata
+        if not isinstance(videos[0], dict) or "prefix" not in videos[0] or "name" not in videos[0]:
+            return False, "First item must be metadata with 'prefix' and 'name' fields"
+
+        # Subsequent items should be either empty dicts or clip dictionaries
+        for i, video in enumerate(videos[1:], start=1):
+            if not isinstance(video, dict):
+                return False, f"Video entry {i} must be a dictionary"
+
+            for timestamp, duration in video.items():
+                if not isinstance(duration, int) or duration < 0:
+                    return False, f"Duration for timestamp {timestamp} must be a positive integer"
+
+    return True, "File structure is valid"
+
+
 def get_links(url):  # todo: this is already in tatoclip's common.py and has just been accidentally reengineered lmao, use whichever is better for both
     global get_links_memo
     global trust_links_memo_timestamp
@@ -38,11 +103,17 @@ def get_links(url):  # todo: this is already in tatoclip's common.py and has jus
     if trust_links_memo_timestamp > time.time() and url in get_links_memo:
         return get_links_memo[url]
 
-    playlist = Playlist(url)
-    links = list(playlist.video_urls)
-    get_links_memo[url] = links
-    trust_links_memo_timestamp = time.time() + trust_cache_time_seconds
-    return links
+    try:
+        playlist = Playlist(url)
+        links = list(playlist.video_urls)
+        get_links_memo[url] = links
+        trust_links_memo_timestamp = time.time() + trust_cache_time_seconds
+        return links
+    except Exception as e:
+        print(f"Failed to get links for {url}: {str(e)}")
+        get_links_memo[url] = False
+        traceback.print_exc()
+        return False
 
 
 def timestamp_to_sec(timestamp):
@@ -84,12 +155,24 @@ async def setclipfile(message, words = ""):
         words = ["!>setclipfile", f"targets_{message.channel.name}.json".replace("-", "_")]
 
     filename = words[1]
-    guild_id = message.guild.id  # Assuming `guild_id` is available from the message object # todo: assert outside of DM for this plugin?
+    guild_id = message.guild.id
     cache_dir = os.path.join(".", "cache", "tatoclip", str(guild_id))
     cinIO.ensureDirs([cache_dir])
     filepath = os.path.join(cache_dir, filename)
 
-    if os.path.exists(filepath): # ------------------------------------------------------------------------------------------------ case file exists, use it --- #
+    if os.path.exists(
+            filepath):  # ------------------------------------------------------------------------------------------------ case file exists, use it --- #
+        # Validate existing file
+        try:
+            with open(filepath, 'r') as f:
+                data = json.load(f)
+            valid, msg = validate_project_file(data)
+            if not valid:
+                await message.channel.send(f"Warning: Invalid project file structure: {msg}")
+        except Exception as e:
+            await message.channel.send(f"Error validating file: {str(e)}")
+            return False
+
         clip_file_names[message.channel.name] = filepath
         await message.channel.send(f"Loading clip configuration from {filepath}.")
         return True
@@ -101,33 +184,106 @@ async def setclipfile(message, words = ""):
     if closest_match: # ------------------------------------------------------------------------------------------- case fuzzy match for file exists, use it --- #
         filename = closest_match[0]
         filepath = os.path.join(cache_dir, filename)
+
+        # Validate the matched file
+        try:
+            with open(filepath, 'r') as f:
+                data = json.load(f)
+            valid, msg = validate_project_file(data)
+            if not valid:
+                await message.channel.send(f"Warning: Invalid project file structure in matched file (might just be missing url): {msg}")
+        except Exception as e:
+            await message.channel.send(f"Error validating matched file: {str(e)}")
+            return False
+
         clip_file_names[message.channel.name] = filepath
         await message.channel.send(f"Found a close match for the alias: {filename}")
+
+        data = load_clip_file(message)
+        global lastVideoIndex
+        lastVideoIndex = len(data)
+
         return True
 
-    # On 404, require URL to build the file
-    if len(words) < 3: # ------------------------------------------------------------ case no matching file and no link provided, prompt req link; fail case --- #
-        await message.channel.send(f"No match for {filename}. Usage: !>setclipfile <filename.json> <url>")
-        return False
+    # ------------------------------------------------------------------------------------------- case no matching file found, create new file --- #
+    # URL is now optional - create empty structure if not provided
+    url = words[2] if len(words) > 2 else ""
 
-    # ------------------------------------------------------------------------------------------- case no matching file found, but link provided; build file --- #
-    url = words[2]
-    links = get_links(url)
-
-    data = {url: []}
-    data[url].append({"prefix": "Part ", "name": filename.replace("targets_", "").replace(".json", "")})
-    for i in range(len(links)):  # Pad to length of playlist
-        data[url].append({})
-
-    await message.channel.send(f"New clip configuration created for {url}.")
+    if url:
+        try:
+            print("yop?")
+            links = get_links(url)
+            data = {url: []}
+            data[url].append({"prefix": "Part ", "name": filename.replace("targets_", "").replace(".json", "")})
+            for i in range(len(links)):  # Pad to length of playlist
+                data[url].append({})
+            await message.channel.send(f"New clip configuration created for {url}.")
+        except Exception as e:
+            await message.channel.send(f"Error processing playlist URL: {str(e)}")
+            return False
+    else:
+        # Create empty structure without URL
+        data = {"": [{"prefix": "Part ", "name": filename.replace("targets_", "").replace(".json", "")}]}
+        await message.channel.send(f"New empty clip configuration created. Add a URL later with !>seturl.")
 
     # Save the new configuration file in the cache directory
     with open(filepath, 'w') as file:
         json.dump(data, file, indent=4)
 
     # Update the global clip_file_names dictionary with the channel name and filepath
+    clip_file_names[message.channel.name] = filepath
     await message.channel.send(f"Clip configuration saved to {filepath}.")
     return True
+
+
+async def seturl(message):
+    """Command to add/update the playlist URL in an existing project file"""
+    global clip_file_names
+
+    if message.channel.name not in clip_file_names:
+        await message.channel.send("No clip file configured. Use !>setclipfile first.")
+        return False
+
+    words = message.content.split()
+    if len(words) < 2:
+        await message.channel.send("Usage: !>seturl <playlist_url>")
+        return False
+
+    url = words[1]
+    filepath = clip_file_names[message.channel.name]
+
+    try:
+        # Load existing data
+        with open(filepath, 'r') as f:
+            data = json.load(f)
+
+        # Validate the URL
+        print("yop2?")
+        links = get_links(url)
+
+        # If file has existing URL, keep the clips but update the URL
+        old_url = next(iter(data.keys())) if data else ""
+        if old_url:
+            # Move existing clips under new URL
+            clips = data[old_url]
+            data = {url: clips}
+        else:
+            # Create new structure with URL
+            data = {url: [
+                {"prefix": "Part ", "name": os.path.basename(filepath).replace("targets_", "").replace(".json", "")}]}
+            for i in range(len(links)):  # Pad to length of playlist
+                data[url].append({})
+
+        # Save updated file
+        with open(filepath, 'w') as f:
+            json.dump(data, f, indent=4)
+
+        await message.channel.send(f"Playlist URL updated to {url}")
+        return True
+
+    except Exception as e:
+        await message.channel.send(f"Error updating URL: {str(e)}")
+        return False
 
 
 
@@ -214,35 +370,107 @@ async def renderClips(message):
 
 
 async def clip(message):
-    words = message.content.split()
+    words = message.content.lower().split()
     global clipping_mode
     global lastVideoIndex
     global clip_file_names
 
     # If in clipping mode and first word is a timestamp, prepend clip command
-    if len(words) == 2 and (":" in words[0] or ";" in words[0]) and str(message.channel.id) in clipping_mode:
+    if len(words) >= 2 and (":" in words[0] or ";" in words[0]) and str(message.channel.id) in clipping_mode:
         words.insert(0, "clip")
-    elif not ("clip" in words[0]): return # if not clip command, return
+    elif not ("clip" in words[0]):
+        return  # if not clip command, return
 
     if message.channel.name not in clip_file_names and not await setclipfile(message, ["!>setclipfile"]):
-        return # if no clip file set and !>setclipfile doesn't find one, return
+        return  # if no clip file set and !>setclipfile doesn't find one, return
 
     if len(words) > 1 and "toggle" in words[1]:
         await clipToggle(message)
         return # clip toggle toggled, return
 
-    if len(words) < 3:
-        await message.channel.send("Usage: [clip] [index] <timestamp> <duration>")
-        return # missing an arg?
+    print("aAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 
     data = await ensureClipFileAndLoad(message)
     if data is None: return
 
-    #       check valid timestamp
-    words[1] = words[1].replace(";", ":") # allow semicolon typo for timestamps
+    # Handle multiple timestamp-duration pairs
+    if len(words) >= 3 and (":" in words[1] or ";" in words[1]):
+        # Determine if first argument is index or timestamp
+        try:
+            index = int(words[1])
+            if index < 1:
+                raise ValueError("Index must be greater than 0.")
+            pairs = words[2:]
+        except ValueError:
+            index = lastVideoIndex
+            pairs = words[1:]
+
+        # Process pairs two at a time (timestamp, duration)
+        results = []
+        for i in range(0, len(pairs), 2):
+            if i + 1 >= len(pairs):
+                break
+
+            timestamp = pairs[i].replace(";", ":")
+            try:
+                duration = int(pairs[i + 1])
+            except ValueError:
+                results.append(f"Invalid duration: {pairs[i + 1]}")
+                continue
+
+            # Process the clip
+            url = list(data.keys())[0]
+            videos = data[url]
+            print("yop3?")
+            links = get_links(url) or [""] * 100
+
+            removed = False
+            if index > len(links):
+                results.append(f"Index {index} is out of bounds. Maximum index is {len(videos)}.")
+                continue
+            elif index == len(videos) - 1 or index >= len(videos):
+                videos.append({timestamp: duration})
+            else:
+                video_segment = videos[index]
+                if isinstance(video_segment, dict):
+                    video_segment[timestamp] = duration
+                    if duration == 0:
+                        video_segment.pop(timestamp)
+                        removed = True
+                else:
+                    results.append(f"Unexpected format in the clip file at index {index}.")
+                    continue
+
+            lastVideoIndex = index
+            print("yop4?")
+            links = get_links(url)
+            if links:
+                link = links[index - 1]
+            else:
+                link = "failed to get link?"
+
+            if removed:
+                results.append(f"Clip deleted at {timestamp}")
+            else:
+                results.append(f"{timestamp}: {duration}s - {link}&t={timestamp_to_sec(timestamp)}")
+
+        # Save changes
+        data[url] = videos
+        with open(clip_file_names[message.channel.name], 'w') as file:
+            json.dump(data, file, indent=4)
+
+        await message.channel.send("\n".join(results))
+        return
+
+    # Original single clip handling (unchanged)
+    if len(words) < 3:
+        await message.channel.send("Usage: [clip] [index] <timestamp> <duration>")
+        return
+
+    words[1] = words[1].replace(";", ":")
     if ":" in words[1]:
         timestamp = words[1]
-        index = lastVideoIndex  # Use the last used index
+        index = lastVideoIndex
     else:
         try:
             index = int(words[1])
@@ -259,11 +487,10 @@ async def clip(message):
         await message.channel.send("Duration must be an integer.")
         return
 
-    # actually clip
-
     url = list(data.keys())[0]
-    links = list(Playlist(url))
     videos = data[url]
+    print("yop5?")
+    links = get_links(url) or [""] * 100
 
     removed = False
     if index > len(links):
@@ -287,11 +514,18 @@ async def clip(message):
         json.dump(data, file, indent=4)
 
     lastVideoIndex = index
+    print("yop6?")
+    links = get_links(url)
+    if links:
+        link = links[index - 1]
+    else:
+        print("get_links returned false?")
+        link = "get_links returned false?"
+    print("b")
 
     if removed:
         await message.channel.send(f"Clip deleted at index {index} with timestamp {timestamp}")
     else:
-        link = get_links(url)[index - 1]
         await message.channel.send(
             f"Clip added/updated at index {index} with timestamp {timestamp} and duration {duration}s.\n{link}&t={timestamp_to_sec(timestamp)}")
 
@@ -326,6 +560,7 @@ async def getClips(message):
         await message.channel.send(f"Unexpected format in the clip file at index {index}.")
         return
 
+    print("yop8?")
     link = get_links(url)[index - 1]
 
     # Format the clips for display
@@ -345,6 +580,7 @@ async def getAllClips(message):
     url = list(data.keys())[0]
     videos = data[url]
 
+    print("yop9?")
     links = get_links(url)
 
     if not videos:
@@ -356,7 +592,7 @@ async def getAllClips(message):
     total_runtime = 0
     for index, clips in enumerate(videos[1:], start=1):
         runtime = 0
-        if index > len(links):  # tape: for some reason, first clip to last video in playlist is added to index+1, this patches that, forcing all OOB video clips to last video
+        if index > len(links):  # todo tape: for some reason, first clip to last video in playlist is added to index+1, this patches that, forcing all OOB video clips to last video
             videos[len(links)].update(videos[index])
             videos.pop(index)
             index = len(links)
@@ -429,6 +665,13 @@ async def ensureClipFileAndLoad(message):
         await message.channel.send("Json says no?")
         return None
 
+    valid, msg = validate_project_file(data)
+    if valid:
+        return data
+    else:
+        message.channel.send("failed to validate file: {msg}")
+        return None
+
     return data
 
 
@@ -445,18 +688,24 @@ def bind_commands():
         "getclips": getClips,
         "getallclips": getAllClips,
         "renderclips": renderClips,
+        "seturl": seturl,
     }
-
 
 def bind_help():
     return {
         "setclipfile": "Initialize or configure clip settings. Usage:\n"
                        "`!>setclipfile [filename.json] [playlist_url]`\n\n"
                        "• Creates new config if file doesn't exist\n"
+                       "• URL is optional - can be added later with !>seturl\n"
                        "• Auto-matches similar filenames\n"
                        "• Defaults to `targets_[channelname].json`\n\n"
                        "Example:\n"
-                       "`!>setclipfile targets_tutorials.json https://youtube.com/playlist?list=...`",
+                       "`!>setclipfile targets_tutorials.json` (create empty)\n"
+                       "`!>setclipfile targets_lessons.json https://youtube.com/playlist?list=...`",
+
+        "seturl": "Add or update the playlist URL in an existing project file.\n"
+                  "Usage: `!>seturl <playlist_url>`\n\n"
+                  "Example: `!>seturl https://youtube.com/playlist?list=...`",
 
         "clip": "Add/edit video clips. Usage:\n"
                 "`[clip] <video index> <timestamp> <duration>` (sets video index)\n"
