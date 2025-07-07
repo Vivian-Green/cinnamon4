@@ -45,8 +45,6 @@ trust_links_memo_timestamp = 0
 #   {data},
 # ]
 
-# todo: snake_case function namessssss
-
 def getDefaultCache():
     return {
         "targets.json_path": "",
@@ -150,7 +148,7 @@ def load_clip_file(message):
         return None
 
 
-async def setclipfile(message, words = ""):
+async def set_clip_file(message, words =""):
     global clip_file_names
 
     if words == "":
@@ -234,7 +232,7 @@ async def setclipfile(message, words = ""):
     return True
 
 
-async def seturl(message):
+async def set_url(message):
     global clip_file_names
 
     if message.channel.name not in clip_file_names:
@@ -282,7 +280,7 @@ async def seturl(message):
 clipping_mode = {}
 
 
-async def clipToggle(message):
+async def clip_toggle(message):
     global clipping_mode
 
     channel_id = str(message.channel.id)
@@ -291,13 +289,13 @@ async def clipToggle(message):
     await message.channel.send(f"Clipping mode {status}.")
 
 
-async def renderClips(message):
+async def render_clips(message):
     words = message.content.split()
-    if message.channel.name not in clip_file_names and not await setclipfile(message, ["!>setclipfile"]):
+    if message.channel.name not in clip_file_names and not await set_clip_file(message, ["!>setclipfile"]):
         return
 
     # Ensure valid clip configuration
-    data = await ensureClipFileAndLoad(message)
+    data = await ensure_clip_file_and_load(message)
     if data is None:
         return
 
@@ -367,14 +365,14 @@ async def clip(message):
     elif not ("clip" in words[0]):
         return
 
-    if message.channel.name not in clip_file_names and not await setclipfile(message, ["!>setclipfile"]):
+    if message.channel.name not in clip_file_names and not await set_clip_file(message, ["!>setclipfile"]):
         return
 
     if len(words) > 1 and "toggle" in words[1]:
-        await clipToggle(message)
+        await clip_toggle(message)
         return
 
-    data = await ensureClipFileAndLoad(message)
+    data = await ensure_clip_file_and_load(message)
     if data is None:
         return
 
@@ -506,7 +504,7 @@ async def clip(message):
             f"Clip added/updated at index {index} with timestamp {timestamp} and duration {duration}s.\n{link}{time_param}")
 
 
-async def getClips(message):
+async def get_clips(message):
     words = message.content.split()
     global clip_file_names
     if len(words) < 2:
@@ -521,7 +519,7 @@ async def getClips(message):
         await message.channel.send(f"Invalid index: {e}")
         return
 
-    data = await ensureClipFileAndLoad(message)
+    data = await ensure_clip_file_and_load(message)
     if data is None:
         return
 
@@ -545,10 +543,10 @@ async def getClips(message):
     await message.channel.send(f"```{response}```")
 
 
-async def getAllClips(message):
+async def get_all_clips(message):
     global clip_file_names
 
-    data = await ensureClipFileAndLoad(message)
+    data = await ensure_clip_file_and_load(message)
     if data is None:
         return
 
@@ -619,7 +617,7 @@ def format_seconds(seconds):
     return ":".join(parts)
 
 
-async def ensureClipFileAndLoad(message):
+async def ensure_clip_file_and_load(message):
     if message.channel.name not in clip_file_names or not os.path.exists(clip_file_names[message.channel.name]):
         await message.channel.send("No clip configuration found. Use !>setclipfile to initialize.")
         return None
@@ -646,12 +644,12 @@ def bind_phrases():
 
 def bind_commands():
     return {
-        "setclipfile": setclipfile,
+        "setclipfile": set_clip_file,
         "clip": clip,
-        "getclips": getClips,
-        "getallclips": getAllClips,
-        "renderclips": renderClips,
-        "seturl": seturl,
+        "getclips": get_clips,
+        "getallclips": get_all_clips,
+        "renderclips": render_clips,
+        "seturl": set_url,
     }
 
 
