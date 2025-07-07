@@ -1,6 +1,7 @@
 import os
+from bot import help_entries  # Changed from help_strings to help_entries
 
-from bot import help_strings
+
 async def send_long_message(channel, content):
     """Helper function to send messages that may exceed Discord's limit"""
     if len(content) <= 2000:
@@ -27,9 +28,22 @@ async def send_long_message(channel, content):
 async def help_command(message):
     words = message.content.lower().split()
 
-    # Build base command list
-    formatted_commands = "\n".join([f"• `{cmd}`" for cmd in sorted(help_strings.keys())])
-    base_response = f"Available commands:\n{formatted_commands}\n\nType `/help <command>` for more info."
+    # Build base command list grouped by plugin
+    plugins_commands = {}
+    for cmd, entry in help_entries.items():
+        plugin_name = entry["plugin"]
+        if plugin_name not in plugins_commands:
+            plugins_commands[plugin_name] = []
+        plugins_commands[plugin_name].append(cmd)
+
+    # Format base response with plugins
+    formatted_response = []
+    for plugin_name, cmds in sorted(plugins_commands.items()):
+        formatted_response.append(f"\n**{plugin_name}:**")
+        formatted_response.extend([f"• `{cmd}`" for cmd in sorted(cmds)])
+
+    base_response = "Available commands (grouped by plugin):" + "\n".join(formatted_response)
+    base_response += "\n\nType `!>help <command>` for more info. `!>help help` for helpier help"
 
     # Handle different command variations
     if len(words) == 1:
@@ -38,28 +52,40 @@ async def help_command(message):
 
     if len(words) > 2:
         await message.channel.send(
-            help_strings["help"]
+            help_entries["help"]["help"]  # Updated to use new structure
         )
         return
 
     # Handle specific command cases
     if words[1] == "all" or words[1] == "dump":
-        # Build complete help message
+        # Build complete help message organized by plugin
         full_help = []
-        for cmd, help_text in sorted(help_strings.items()):
-            full_help.append(f"# **{cmd}**\n{help_text}")
+        current_plugin = None
+
+        # Sort commands by plugin then by command name
+        sorted_entries = sorted(help_entries.items(), key=lambda x: (x[1]["plugin"], x[0]))
+
+        for cmd, entry in sorted_entries:
+            if entry["plugin"] != current_plugin:
+                current_plugin = entry["plugin"]
+                full_help.append(f"\n## {current_plugin.upper()} ##")
+            full_help.append(f"### {cmd}\n{entry['help']}")
+
         complete_help = "\n\n".join(full_help)
 
         if words[1] == "dump":
             if not dump_help_to_md(complete_help):
-                message.channel.send("Already dumped help this session! It'll just be the same!")
+                await message.channel.send("Already dumped help this session! It'll just be the same!")
 
         await send_long_message(message.channel, complete_help)
-    elif words[1] in help_strings:
-        help_text = help_strings[words[1]]
+    elif words[1] in help_entries:
+        help_text = help_entries[words[1]]["help"]
         await send_long_message(message.channel, help_text)
     else:
-        await message.channel.send(f"Unknown command '{words[1]}'. Available options:\n{formatted_commands}\n\nOr use `/help all` to see all help messages.")
+        await message.channel.send(
+            f"Unknown command '{words[1]}'. {base_response}"
+        )
+
 
 has_dumped_help = False
 
@@ -74,7 +100,7 @@ def dump_help_to_md(help_str):
     parent_parent_dir = os.path.dirname(os.path.dirname(current_file_dir))
 
     readme_path = os.path.join(parent_parent_dir, 'README.md')
-    help_content = f"GENERATED HELP PAGE FROM PLUGINS:\n\n{help_str}".replace("# ", "### ").replace("\n", "\n\n").replace("\n\n\n\n", "\n\n")
+    help_content = f"# GENERATED HELP PAGE FROM PLUGINS\n\n{help_str}"
 
     help_file_path = os.path.join(parent_parent_dir, 'help.md')
     try:
@@ -88,31 +114,29 @@ def dump_help_to_md(help_str):
         with open(readme_path, 'r', encoding='utf-8') as f:
             readme_content = f.read()
 
-        # Check if the marker exists in readme.md
-        marker_pos = readme_content.find("GENERATED HELP PAGE")
+        marker_pos = readme_content.find("# GENERATED HELP PAGE")
         if marker_pos != -1:
-            # Keep content before marker and append new help content
             new_content = readme_content[:marker_pos] + help_content
-
-            # Write updated README
             with open(readme_path, 'w', encoding='utf-8') as f:
                 f.write(new_content)
         else:
-            print("couldn't find help page preamble in README.md, ")
+            print("Couldn't find help page marker in README.md")
         return True
     return False
+
 
 def bind_commands():
     return {
         "help": help_command
     }
 
+
 def bind_help():
-    return{
+    return {
         "help":
-        "`!>help` - list commands\n"
-        "`!>help <command>` - specific help\n"
-        "`!>help all` - show all help messages\n"
-        "`!>help dump` - dump all help messages to help.md\n"
-        "`!>help help` - show this help message"
+            "`!>help` - list commands grouped by plugin\n"
+            "`!>help <command>` - specific command help\n"
+            "`!>help all` - show all help messages organized by plugin\n"
+            "`!>help dump` - dump all help messages to help.md\n"
+            "`!>help help` - show this help message"
     }

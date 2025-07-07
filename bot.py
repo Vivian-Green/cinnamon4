@@ -1,23 +1,16 @@
-import cinIO
-
 print("bot starting...")
 cinnamonVersion = "4.0.0"
 description = "Multi-purpose bot that does basically anything I could think of"
 
 # changelog in README.txt
 
-debugSettings = {  # todo: what the FUCK is this doing in code
+debugSettings = {
     "doReminders": True
 }
 
 # !!!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[DEFINITIONS & IMPORTS]
 
-import platform
-import sys
-import os
 import os.path
-
-from logging import warning
 import traceback
 
 import time
@@ -29,11 +22,9 @@ import discord.ext
 from discord.ext import tasks
 
 import cinLogging  # logging import changed to only import warning to prevent confusion here
-from cinLogging import printHighlighted, printDefault, printLabelWithInfo, printErr, printDebug
-from cinShared import *
-from cinIO import config, token, userData, getOrCreateUserData
+from cinLogging import printHighlighted, printDefault, printLabelWithInfo, printErr
+from cinIO import config, token
 from cinPalette import *
-#from cinYoinkytModule import setclipfile, clip, getClips, getAllClips, renderClips
 
 import importlib.util
 from pathlib import Path
@@ -44,7 +35,7 @@ os.system("color")
 commands: Dict[str, Callable] = {}
 phrases: Dict[str, Callable] = {}
 reactionhandlers: Dict[str, Callable] = {}
-help_strings: Dict[str, str] = {}
+help_entries: Dict[str, Dict[str, str]] = {}
 loopfunctions = []
 
 client = discord.Client(intents=discord.Intents.all(), max_messages=100)
@@ -118,7 +109,12 @@ async def handleCommand(message):
             try:
                 await func(message)
             except Exception as e:
-                printErr(f"err in {func}: {e}")
+                printErr(f"Command '{cmd}' failed:")
+                printErr(f"  Error: {e}")
+                printErr("  Full traceback:")
+                printErr(traceback.format_exc())  # <-- This prints the full stack trace
+                # Optionally, notify the user (if you don't want silent failures)
+                await message.channel.send(f"❌ Command failed: `{cmd}`\n```{type(e).__name__}: {e}```")
             return
 
 # !!!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[STATUS]
@@ -264,10 +260,16 @@ def load_plugins():
 
         if hasattr(module, "bind_help"):
             plugin_help = module.bind_help()
+            plugin_name = plugin_dir.name
             if isinstance(plugin_help, dict):
-                help_strings.update(plugin_help)
+                for cmd, help_text in plugin_help.items():
+                    help_entries[cmd] = {
+                        "help": help_text,
+                        "plugin": plugin_name
+                    }
+                printLabelWithInfo("    help entries:", f"{len(plugin_help)} from {plugin_name}")
             else:
-                printErr(f"bind_help() in plugin {plugin_dir} returned invalid data? {plugin_help}")
+                printErr(f"bind_help() in plugin {plugin_name} returned invalid data? {plugin_help}")
 
         if hasattr(module, "bind_loop"):
             loopy = module.bind_loop()

@@ -17,7 +17,6 @@ lastVideoIndex = 1
 get_links_memo = {}
 trust_links_memo_timestamp = 0
 
-# todo: update to use metadata version 1
 # old:
 # {
 # "https://www.youtube.com/watch?v=rLw2ndAW9NE&list=PLenI3Kbdx0D19iGG1nElWVp0GpI-cUHMQ": [
