@@ -1,48 +1,19 @@
 import os
-import json
 import difflib
 import time
 import subprocess
 import traceback
 
+import discord
 from pytube import Playlist
 
 import cinIO
 from cinIO import loadCache
-from cinLogging import printLabelWithInfo
-
-clip_file_names = {}
-lastVideoIndex = 1
-
-get_links_memo = {}
-trust_links_memo_timestamp = 0
-
-# old:
-# {
-# "https://www.youtube.com/watch?v=rLw2ndAW9NE&list=PLenI3Kbdx0D19iGG1nElWVp0GpI-cUHMQ": [
-#    {
-#        "prefix": "Part ",
-#        "name": "example",... [name optional]
-#    },
-#       {data},
-#       {data},...
-#   ]
-# }
-# new:
-# [
-#   {
-#       "prefix": "Part ",
-#       "version": 1,
-#       "name": "example", [name required]
-#       "url": "https://www.youtube.com...list=..."
-#   },
-#   {
-#       "0:00": 5,
-#       "1:23": 30,...
-#   },
-#   {data},
-#   {data},
-# ]
+from plugins.tatoclip_plugin.file_operations import save_json_to_filepath, load_clip_file, ensure_clip_file_and_load
+from plugins.tatoclip_plugin.metadata_handler import show_metadata, resolve_alias_to_effective_index, get_effective_index, \
+    update_offset, update_alias, get_raw_index
+from plugins.tatoclip_plugin.project_validation import validate_project_file
+from plugins.tatoclip_plugin.time_utils import timestamp_to_sec, format_seconds
 
 def get_default_cache():
     return {
@@ -51,114 +22,34 @@ def get_default_cache():
         "trust_cache_time_seconds": 3600
     }
 
-# Variables
+lastVideoRawIndex = 1
+
+get_links_memo = {}
+trust_links_memo_timestamp = 0
+
 tatoclip_config = loadCache("tatoclip/tatoclip_config.json", get_default_cache())
 
 targets_json_path = tatoclip_config["targets.json_path"]
 tatoclip_py_path = tatoclip_config["tatoclip.py_path"]
 trust_cache_time_seconds = tatoclip_config["trust_cache_time_seconds"]
 
+clipping_mode = {}
+clip_file_names = {}
 
-def convert_v0_to_v1(data):
-    """Convert version 0 project format to version 1"""
-    if not isinstance(data, dict) or len(data) == 0:
-        return data  # Not v0 format
+async def get_file_path_from_message(message):
+    global clip_file_names
+    if message.channel.name not in clip_file_names or not os.path.exists(clip_file_names[message.channel.name]):
+        await message.channel.send("No clip configuration found. Use !>setclipfile to initialize.")
+        return None
+    return clip_file_names[message.channel.name]
 
-    is_v0, msg = validate_project_file_v0(data)
-    if not is_v0:
-        print(msg)
-        return data # invalid v0 format?
-
-    new_data = []
-    for url, videos in data.items():
-        if not videos:
-            continue
-
-        # Extract metadata
-        metadata = videos[0]
-        metadata["url"] = url
-        metadata["version"] = 1
-
-        # Ensure name exists
-        if "name" not in metadata:
-            metadata["name"] = url.split('=')[-1][:20]  # Generate default name
-
-        new_data.append(metadata)
-        new_data.extend(videos[1:])
-
-    return new_data
-
-def validate_project_file(data):
-    is_up_to_date, msg = validate_project_file_v1(data)
-    if not is_up_to_date:
-        is_v0, msg2 = validate_project_file_v0(data)
-        if is_v0:
-            msg = f"{msg}... actually, this is a valid v0 file..."
-    return is_up_to_date, msg
-
-def validate_project_file_v1(data):
-    """Validate both old and new project file structures"""
-    # Version 1 structure (list-based)
-    if isinstance(data, list):
-        if len(data) == 0:
-            return True, "Empty file is valid for initialization"
-
-        # Validate metadata (first element)
-        metadata = data[0]
-        if not isinstance(metadata, dict):
-            return False, "First element must be metadata dictionary"
-
-        required_keys = {"prefix", "name", "url", "version"}
-        if not required_keys.issubset(metadata.keys()):
-            return False, "Metadata missing required keys: prefix, name, url, version"
-
-        if metadata["version"] != 1:
-            return False, f"Unsupported version: {metadata['version']}"
-
-        # Validate clip entries
-        for i, entry in enumerate(data[1:], start=1):
-            if not isinstance(entry, dict):
-                return False, f"Entry {i} must be a dictionary"
-
-            for timestamp, duration in entry.items():
-                if not isinstance(duration, int) or duration < 0:
-                    return False, f"Duration for timestamp {timestamp} must be positive integer"
-
-        return True, "Valid version 1 structure"
-
-    return False, "Root element must be list"
-
-def validate_project_file_v0(data):
-    """Validate the structure of a project/targets JSON file."""
-    if not isinstance(data, dict):
-        return False, "Root element must be a dictionary"
-
-    if len(data) == 0:
-        return True, "Empty file is valid for initialization"
-
-    # Check each URL entry in the file
-    for url, videos in data.items():
-        if not isinstance(videos, list):
-            return False, f"Videos for URL {url} must be a list"
-
-        if len(videos) == 0:
-            continue
-
-        # First item should be metadata
-        if not isinstance(videos[0], dict) or "prefix" not in videos[0] or "name" not in videos[0]:
-            return False, "First item must be metadata with 'prefix' and 'name' fields"
-
-        # Subsequent items should be either empty dicts or clip dictionaries
-        for i, video in enumerate(videos[1:], start=1):
-            if not isinstance(video, dict):
-                return False, f"Video entry {i} must be a dictionary"
-
-            for timestamp, duration in video.items():
-                if not isinstance(duration, int) or duration < 0:
-                    return False, f"Duration for timestamp {timestamp} must be a positive integer"
-
-    return True, "File structure is valid"
-
+async def check_with_err(condition: bool, warning: str, message: discord.message = None):
+    if condition: return True
+    if message:
+        await message.channel.send(warning)
+    else:
+        print(warning)
+    return False
 
 def get_links(url):  # todo: this is already in tatoclip's common.py and has just been accidentally reengineered lmao, use whichever is better for both
     global get_links_memo
@@ -168,8 +59,8 @@ def get_links(url):  # todo: this is already in tatoclip's common.py and has jus
     # Use memoized result if valid
     if trust_links_memo_timestamp > time.time() and url in get_links_memo:
         result = get_links_memo[url]
-        if result:
-            return result
+        if result: return result
+
         print(f"Previously failed to get links for playlist {url}, using cached result of False")
         return False
 
@@ -186,210 +77,7 @@ def get_links(url):  # todo: this is already in tatoclip's common.py and has jus
         return False
 
 
-def timestamp_to_sec(timestamp):
-    parts = list(map(int, timestamp.split(':')))
-    if len(parts) == 3:
-        h, m, s = parts
-    elif len(parts) == 2:
-        h = 0
-        m, s = parts
-    else:
-        raise ValueError("Invalid timestamp format")
-    return h * 3600 + m * 60 + s
-
-
-def load_clip_file(message):
-    global clip_file_names
-    try:
-        filepath = clip_file_names[message.channel.name]
-        with open(filepath, 'r') as file:
-            data = json.load(file)
-
-        # Convert v0 to v1 if needed
-        if isinstance(data, dict):
-            # todo: should prolly check if is valid v0? but eh?
-            printLabelWithInfo("Converting v0 to v1", filepath)
-            new_data = convert_v0_to_v1(data)
-            # Save converted version
-            with open(filepath, 'w') as file:
-                json.dump(new_data, file, indent=4)
-            with open(f"{filepath}_old", 'w') as file:
-                json.dump(data, file, indent=4)
-
-        # Validate after conversion
-        valid, msg = validate_project_file(data)
-        if not valid:
-            print(f"Invalid project file: {msg}")
-            return None
-
-        return data
-    except FileNotFoundError:
-        print(f"Error: File '{clip_file_names[message.channel.name]}' not found.")
-        return None
-    except json.JSONDecodeError:
-        print(f"Error: Failed to parse JSON from '{clip_file_names[message.channel.name]}'")
-        return None
-    except Exception as e:
-        print(f"Unexpected error loading clip file: {str(e)}")
-        return None
-
-
-async def set_clip_file(message, words =""):
-    global clip_file_names
-    global lastVideoIndex
-
-    if words == "":
-        words = (message.content.split())
-    if len(words) < 2: # ---------------------------------------------------------------------------------- infer filename from channel name if not supplied --- #
-        words = ["!>setclipfile", f"targets_{message.channel.name}.json".replace("-", "_")]
-
-    filename = words[1]
-    guild_id = message.guild.id
-    cache_dir = os.path.join(".", "cache", "tatoclip", str(guild_id))
-    cinIO.ensureDirs([cache_dir])
-    filepath = os.path.join(cache_dir, filename)
-
-    if os.path.exists(filepath):  # ---------------------------------------------------------------------------------------------- case file exists, use it --- #
-        try:
-            with open(filepath, 'r') as f:
-                data = json.load(f)
-            valid, msg = validate_project_file(data)
-            if not valid:# todo: from here
-                if "valid v0 file" in msg:
-                    await message.channel.send(f"Warning: project file using metadata v0.. updating...")
-                    new_data = convert_v0_to_v1(data)
-                    # Save converted version
-                    with open(filepath, 'w') as file:
-                        json.dump(new_data, file, indent=4)
-                    with open(f"{filepath}_old", 'w') as file:
-                        json.dump(data, file, indent=4)
-                    data = new_data
-                else:
-                    await message.channel.send(f"Warning: Invalid project file structure: {msg}")
-        except Exception as e:
-            await message.channel.send(f"Error validating file: {str(e)}")
-            return False
-
-        clip_file_names[message.channel.name] = filepath
-        await message.channel.send(f"Loading clip configuration from {filepath}.")
-        return True
-
-    # Search for a close match within the cache directory
-    json_files = [f for f in os.listdir(cache_dir) if f.endswith('.json')]
-    closest_match = difflib.get_close_matches(f"targets_{filename}", json_files, n=1, cutoff=0.90)
-
-    if closest_match: # ------------------------------------------------------------------------------------------- case fuzzy match for file exists, use it --- #
-        filename = closest_match[0]
-        filepath = os.path.join(cache_dir, filename)
-
-        # Validate the matched file
-        try:
-            with open(filepath, 'r') as f:
-                data = json.load(f)
-            valid, msg = validate_project_file(data)
-            if not valid:
-                await message.channel.send(f"Warning: Invalid project file structure in matched file (might just be missing url): {msg}")
-        except Exception as e:
-            await message.channel.send(f"Error validating matched file: {str(e)}")
-            return False
-
-        clip_file_names[message.channel.name] = filepath
-        await message.channel.send(f"Found a close match for the alias: {filename}")
-
-        data = load_clip_file(message)
-        if data:
-            lastVideoIndex = len(data)
-        return True
-
-    # ------------------------------------------------------------------------------------------- case no matching file found, create new file --- #
-    url = words[2] if len(words) > 2 else ""
-
-    # Create version 1 structure
-    if url:
-        links = get_links(url)
-        if links is False:
-            await message.channel.send(f"Failed to fetch playlist for {url}")
-            return False
-
-        data = [
-            {
-                "prefix": "Part ",
-                "version": 1,
-                "name": filename.replace("targets_", "").replace(".json", ""),
-                "url": url
-            }
-        ]
-        # Add empty clip entries
-        for _ in range(len(links)):
-            data.append({})
-        await message.channel.send(f"New clip configuration created for {url}.")
-    else:
-        data = [
-            {
-                "prefix": "Part ",
-                "version": 1,
-                "name": filename.replace("targets_", "").replace(".json", ""),
-                "url": ""
-            }
-        ]
-        await message.channel.send(f"New empty clip configuration created. Add a URL later with !>seturl.")
-
-    # Save the new project file in the cache directory
-    with open(filepath, 'w') as file:
-        json.dump(data, file, indent=4)
-
-    clip_file_names[message.channel.name] = filepath
-    await message.channel.send(f"Clip configuration saved to {filepath}.")
-    return True
-
-
-async def set_url(message):
-    global clip_file_names
-
-    if message.channel.name not in clip_file_names:
-        await message.channel.send("No clip file configured. Use !>setclipfile first.")
-        return False
-
-    words = message.content.split()
-    if len(words) < 2:
-        await message.channel.send("Usage: !>seturl <playlist_url>")
-        return False
-
-    url = words[1]
-    filepath = clip_file_names[message.channel.name]
-
-    try:
-        with open(filepath, 'r') as f:
-            data = json.load(f)
-
-        links = get_links(url)
-        if links is False:
-            await message.channel.send(f"Failed to fetch playlist for {url}. Please check the URL and try again.")
-            return False
-
-        old_url = next(iter(data.keys())) if data else ""
-        if old_url:
-            clips = data[old_url]
-            data = {url: clips}
-        else:
-            data = {url: [
-                {"prefix": "Part ", "name": os.path.basename(filepath).replace("targets_", "").replace(".json", "")}]}
-            for i in range(len(links)):
-                data[url].append({})
-
-        with open(filepath, 'w') as f:
-            json.dump(data, f, indent=4)
-
-        await message.channel.send(f"Playlist URL updated to {url}")
-        return True
-
-    except Exception as e:
-        await message.channel.send(f"Error updating URL: {str(e)}")
-        return False
-
-
-clipping_mode = {}
-
+# !!!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[discord commands]
 
 async def clip_toggle(message):
     global clipping_mode
@@ -400,26 +88,422 @@ async def clip_toggle(message):
     await message.channel.send(f"Clipping mode {status}.")
 
 
-async def render_clips(message):
-    words = message.content.split()
-    if message.channel.name not in clip_file_names and not await set_clip_file(message, ["!>setclipfile"]):
+async def clip(message):
+    words = message.content.lower().split()
+    global clipping_mode, lastVideoRawIndex, clip_file_names
+
+    # Handle clipping mode
+    if len(words) >= 2 and (":" in words[0] or ";" in words[0]) and str(message.channel.id) in clipping_mode:
+        words.insert(0, "clip")
+    elif not ("clip" in words[0]):
         return
 
-    # Ensure valid clip configuration
-    data = await ensure_clip_file_and_load(message)
+    if message.channel.name not in clip_file_names and not await set_clip_file(message, ["!>setclipfile"]): return
+
+    if len(words) > 1 and "toggle" in words[1]:
+        await clip_toggle(message)
+        return
+
+    data = await ensure_clip_file_and_load(message, await get_file_path_from_message(message))
+    if data is None: return
+
+    # Determine raw_index and pairs_start position
+    raw_index = None
+    effective_index = None
+    pairs_start = 1  # Default to assuming first word is timestamp
+
+    # Try to parse as alias or index
+    if len(words) >= 2:
+        alias_or_index = words[1]
+        effective_index, is_alias = resolve_alias_to_effective_index(data, alias_or_index)
+
+        if is_alias or effective_index > 0:
+            raw_index = effective_index if is_alias else get_raw_index(data, int(alias_or_index))
+            pairs_start = 2
+
+    # If not determined yet, use lastVideoIndex
+    if raw_index is None:
+        raw_index = lastVideoRawIndex
+    else:
+        lastVideoRawIndex = raw_index
+
+    if effective_index is None:
+        effective_index = get_effective_index(data, raw_index)
+
+    # Check if this is a bulk clip command
+    is_bulk = False
+    if len(words) >= 3:
+        timestamp_count = sum(1 for word in words[pairs_start:] if ":" in word or ";" in word)
+        is_bulk = timestamp_count > 1 or (timestamp_count == 1 and len(words) > pairs_start + 2)
+
+    if is_bulk:
+        new_data, results = await handle_batch_clips(message, data, raw_index, pairs_start)
+    else:
+        # Single clip handling
+        if not await check_with_err(len(words) >= pairs_start + 2, "Usage: [clip] [index] <timestamp> <duration>", message): return
+
+        new_data, results = await handle_single_clip(message, data, raw_index, pairs_start)
+
+    # save changes
+    if new_data:
+        save_json_to_filepath(new_data, clip_file_names[message.channel.name], False)
+
+    results = f"For index {effective_index} (raw index {raw_index}): \n" + results
+
+    if results:
+        await message.channel.send(results)
+
+
+def process_single_clip(data: list, raw_index: int, timestamp: str, duration: int) -> tuple:
+    metadata = data[0]
+    videos = data[1:]
+    timestamp = timestamp.replace(";", ":")
+
+    # Ensure videos list is long enough
+    if raw_index > len(videos):
+        while len(videos) < raw_index:
+            videos.append({})
+
+    result_msg = ""
+
+    # Add/remove clip
+    if duration == 0:
+        if timestamp in videos[raw_index - 1]:
+            videos[raw_index - 1].pop(timestamp)
+            result_msg = f"Clip deleted at {timestamp}"
+        else:
+            return None, f"No clip found at {timestamp}"
+    else:
+        videos[raw_index - 1][timestamp] = duration
+        result_msg = f"Clip added/updated at {timestamp} with duration {duration}s"
+
+        # Add link if available
+        url = metadata.get("url", "")
+        links = get_links(url)
+        if links and raw_index <= len(links):
+            link = links[raw_index - 1]
+            time_param = f"&t={timestamp_to_sec(timestamp)}"
+            result_msg += f" `{link}{time_param}`"
+
+    return [metadata] + videos, result_msg
+
+
+async def handle_single_clip(message, data, raw_index, pairs_start) -> (list, str):
+    words = message.content.lower().split()
+
+    try:
+        timestamp = words[pairs_start].replace(";", ":")
+        duration = int(words[pairs_start + 1])
+    except (ValueError, IndexError):
+        return None, "Duration must be an integer."
+
+    new_data, result_msg = process_single_clip(data, raw_index, timestamp, duration)
+    result_msg = result_msg.replace("`", "")
+
+    return new_data, result_msg
+
+async def handle_batch_clips(message, data, raw_index, pairs_start) -> (list, str):
+    words = message.content.lower().split()
+    pairs = words[pairs_start:]
+    results = []
+    current_data = data
+
+    for i in range(0, len(pairs), 2):
+        if i + 1 >= len(pairs):
+            break
+
+        timestamp = pairs[i]
+        try:
+            duration = int(pairs[i + 1])
+        except ValueError:
+            results.append(f"Invalid duration: {pairs[i + 1]}")
+            continue
+
+        updated_data, result_msg = process_single_clip(current_data, raw_index, timestamp, duration)
+        if updated_data is None:
+            results.append(result_msg)
+        else:
+            current_data = updated_data
+            results.append(result_msg)
+
+    # Add video reference if available
+    url = current_data[0].get("url")
+    links = get_links(url)
+    if links and raw_index <= len(links):
+        results.append(f"\nVideo reference: {links[raw_index - 1]}")
+
+    return current_data, "\n".join(results)
+
+def format_part_info(data, raw_index):
+    """Returns formatted string showing raw index, effective index, and alias"""
+    raw_index = int(raw_index)
+    if len(data) <= 1:  # No videos in data
+        return f"Part {raw_index}"
+
+    metadata = data[0]
+    aliases = metadata.get("aliases", {})
+    offsets = metadata.get("offsets", {})
+
+    # Calculate effective index
+    effective_index = get_effective_index(data, raw_index)
+
+    info_parts = [
+        f"Raw index: {raw_index}",
+        f"Effective index: {effective_index}"
+    ]
+
+    # Add alias if exists
+    alias = aliases.get(str(raw_index))
+    if alias:
+        info_parts.append(f"Alias: {alias}")
+
+    return " | ".join(info_parts)
+
+async def format_clips_for_video(data: list, raw_index: int) -> str:
+    """Common helper for formatting clips for a single video"""
+    if raw_index >= len(data[1:]):
+        return None
+
+    clips = data[1:][raw_index - 1]
+    if not isinstance(clips, dict):
+        return None
+
+    part_info = format_part_info(data, raw_index)
+    url = data[0].get("url")
+    links = get_links(url)
+
+    lines = [part_info]
+    if links and raw_index <= len(links):
+        lines.append(f"Video URL: {links[raw_index - 1]}")
+
+    lines.extend(f"{timestamp}: {duration}s" for timestamp, duration in clips.items())
+    return "\n".join(lines)
+
+async def get_clips(message):
+    words = message.content.split()
+    global clip_file_names
+    if not await check_with_err(len(words) >= 2, "Usage: !>getclips <index or alias>", message): return
+
+    data = await ensure_clip_file_and_load(message, await get_file_path_from_message(message))
+    if data is None: return
+
+    # Try to parse as alias first
+    alias_or_index = words[1]
+    effective_index, is_alias = resolve_alias_to_effective_index(data, alias_or_index)
+
+    print("\n\n\n\n\n\njjjjjj\n\n\n\n\n\n")
+
+    # If not an alias, parse as raw index
+    if not is_alias and effective_index > 0:
+        try:
+            raw_index = get_raw_index(data, effective_index)
+            print(effective_index, raw_index, "\n\n\n\n")
+        except ValueError as e:
+            await message.channel.send(f"Invalid index: {e}")
+            return
+    else:
+        if not await check_with_err(not is_alias, f"Invalid index: {effective_index}", message): return
+        raw_index = effective_index
+        print("alias?")
+
+    metadata = data[0]
+    videos = data[1:]
+    if not await check_with_err(raw_index < len(videos), f"Index {raw_index} is out of bounds. Maximum index is {len(videos)}.", message): return
+
+    clips = videos[raw_index - 1]
+    if not await check_with_err(isinstance(clips, dict), f"Unexpected format in the clip file at index {raw_index}.", message): return
+
+    formatted = await format_clips_for_video(data, raw_index)
+    if not formatted: formatted = "No clips found for specified video"
+
+    await message.channel.send(f"```{formatted}```")
+
+
+async def get_all_clips(message):
+    data = await ensure_clip_file_and_load(message, await get_file_path_from_message(message))
     if data is None:
         return
 
+    metadata = data[0]
+    videos = data[1:]
+    url = metadata.get("url")
+    links = get_links(url)
+
+    if not await check_with_err(True and videos, "No clips found.", message): return
+
+    blocks = []
+    total_runtime = 0
+
+    for raw_index, clips in enumerate(videos, start=1):
+        if not isinstance(clips, dict): continue
+
+        runtime = 0
+        clip_lines = []
+
+        # Add part info header
+        part_info = format_part_info(data, raw_index)
+        clip_lines.append(part_info)
+
+        # Add link if available
+        link_text = links[raw_index-1] if raw_index <= len(links) else "unavailable"
+        clip_lines.append(f"Video URL: {link_text}")
+
+        # Process clips
+        for timestamp, duration in clips.items():
+            clip_lines.append(f"    {timestamp}: {duration}s")
+            runtime += duration
+
+        total_runtime += runtime
+        clip_block = f"Runtime: {format_seconds(runtime)}:\n" + "\n".join(clip_lines)
+        blocks.append(f"```{clip_block}```")
+
+    # Send in chunks
+    max_length = 1900
+    current_block = ""
+    for block in blocks:
+        if len(current_block) + len(block) > max_length:
+            await message.channel.send(current_block)
+            current_block = ""
+            time.sleep(1)
+        current_block += block + "\n"
+
+    if current_block:
+        await message.channel.send(current_block)
+
+    await message.channel.send(f"Total runtime: {format_seconds(total_runtime)}")
+
+
+async def set_clip_file(message, words=""):
+    global clip_file_names
+    global lastVideoRawIndex
+
+    if words == "":
+        words = (message.content.split())
+    if len(words) < 2:  # ---------------------------------------------------------------------------------- infer filename from channel name if not supplied --- #
+        words = ["!>setclipfile", f"targets_{message.channel.name}.json".replace("-", "_")]
+
+    filename = words[1]
+    guild_id = message.guild.id
+    cache_dir = os.path.join(".", "cache", "tatoclip", str(guild_id))
+    cinIO.ensureDirs([cache_dir])
+    filepath = os.path.join(cache_dir, filename)
+
+    if os.path.exists(filepath):  # ---------------------------------------------------------------------------------------------- case file exists, use it --- #
+        clip_file_names[message.channel.name] = filepath
+
+        data = load_clip_file(filepath)
+        if data is None: return False
+
+        valid, msg = validate_project_file(data)
+        if not await check_with_err(valid, f"Warning: Invalid project file structure: {msg}", message): return False
+
+        await message.channel.send(f"Loading clip configuration from {filepath}.")
+        return True
+
+    # Search for a close match within the cache directory
+    json_files = [f for f in os.listdir(cache_dir) if f.endswith('.json')]
+    closest_match = difflib.get_close_matches(f"targets_{filename}", json_files, n=1, cutoff=0.90)
+
+    if closest_match:  # ------------------------------------------------------------------------------------------- case fuzzy match for file exists, use it --- #
+        filename = closest_match[0]
+        filepath = os.path.join(cache_dir, filename)
+
+        clip_file_names[message.channel.name] = filepath
+        data = load_clip_file(filepath)
+        if data is None: return False
+
+        valid, msg = validate_project_file(data)
+        await check_with_err(valid, f"Warning: Invalid project file structure in matched file (might just be missing url): {msg}")
+
+        await message.channel.send(f"Found a close match for the alias: {filename}")
+        lastVideoRawIndex = len(data)
+        return True
+
+    # ------------------------------------------------------------------------------------------- case no matching file found, create new file --- #
+    url = words[2] if len(words) > 2 else ""
+
+    # Create v1 structure
+    data = [
+        {
+            "prefix": "Part ",
+            "version": 1,
+            "name": filename.replace("targets_", "").replace(".json", ""),
+            "url": ""
+        }
+    ]
+
+    if url:
+        links = get_links(url)
+        if not await check_with_err(True and links, f"Failed to fetch playlist for {url}", message): return False
+
+        data[0]["url"] = url
+
+        # Add empty clip entries
+        while len(data) < len(links) + 1:
+            data.append({})
+        await message.channel.send(f"New clip configuration created for {url}.")
+    else:
+        await message.channel.send(f"New empty clip configuration created. Add a URL later with !>seturl.")
+
+    # Save the new project file in the cache directory
+    save_json_to_filepath(data, filepath)
+
+    clip_file_names[message.channel.name] = filepath
+    await message.channel.send(f"Clip configuration saved to {filepath}.")
+    return True
+
+
+async def set_url(message):
+    global clip_file_names
+
+    if not await check_with_err(message.channel.name in clip_file_names,"No clip file configured. Use !>setclipfile first.", message):
+        return False
+
+    words = message.content.split()
+    if not await check_with_err(len(words) == 2, "Usage: !>seturl <playlist_url>", message):
+        return False
+
+    url = words[1]
+    filepath = clip_file_names[message.channel.name]
+
+    try:
+        links = get_links(url)
+        if not await check_with_err(links,f"Failed to fetch playlist for {url}. Please check the URL and try again.", message):
+            return False
+
+        data = load_clip_file(filepath)
+        data[0]["url"] = url
+
+        # Add empty clip entries
+        while len(data) < len(links) + 1:
+            data.append({})
+
+        save_json_to_filepath(data, filepath)
+
+        await message.channel.send(f"Playlist URL updated to {url}")
+        return True
+
+    except Exception as e:
+        await message.channel.send(f"Error updating URL: {str(e)}")
+        return False
+
+
+async def render_clips(message):
+    words = message.content.split()
+    if message.channel.name not in clip_file_names and not await set_clip_file(message, ["!>setclipfile"]): return
+
+    # Ensure valid clip configuration
+    data = await ensure_clip_file_and_load(message, await get_file_path_from_message(message))
+    if data is None: return
+
     # Write data to targets JSON
     try:
-        with open(targets_json_path, 'w') as file:
-            json.dump(data, file, indent=4)
+        save_json_to_filepath(data, targets_json_path, True)
 
-        targets_root = os.path.dirname(targets_json_path)
         origin = os.path.basename(clip_file_names[message.channel.name])
-        backup_path = os.path.join(targets_root, origin)
-        with open(backup_path, 'w') as file:
-            json.dump(data, file, indent=4)
+        backup_path = os.path.join(os.path.dirname(targets_json_path), origin)
+
+        save_json_to_filepath(data, backup_path, True)
     except Exception as e:
         await message.channel.send(f"Error writing to targets.json: {e}")
         return
@@ -464,298 +548,97 @@ async def render_clips(message):
         await message.channel.send(f"Error executing render command: {e}")
 
 
-async def clip(message):
-    words = message.content.lower().split()
-    global clipping_mode
-    global lastVideoIndex
+
+
+
+async def set_offset(message):
     global clip_file_names
-
-    # Handle clipping mode
-    if len(words) >= 2 and (":" in words[0] or ";" in words[0]) and str(message.channel.id) in clipping_mode:
-        words.insert(0, "clip")
-    elif not ("clip" in words[0]):
-        return
-
-    if message.channel.name not in clip_file_names and not await set_clip_file(message, ["!>setclipfile"]):
-        return
-
-    if len(words) > 1 and "toggle" in words[1]:
-        await clip_toggle(message)
-        return
-
-    data = await ensure_clip_file_and_load(message)
-    if data is None:
-        return
-
-    metadata = data[0]
-    videos = data[1:]
-
-    # Handle multiple timestamp-duration pairs
-    if len(words) >= 3 and (":" in words[1] or ";" in words[1]):
-        try:
-            index = int(words[1])
-            index -= 1
-            if index < 1:
-                raise ValueError("Index must be greater than 0.")
-            pairs = words[2:]
-        except ValueError:
-            index = lastVideoIndex
-            pairs = words[1:]
-
-        results = []
-        for i in range(0, len(pairs), 2):
-            if i + 1 >= len(pairs):
-                break
-
-            timestamp = pairs[i].replace(";", ":")
-            try:
-                duration = int(pairs[i + 1])
-            except ValueError:
-                results.append(f"Invalid duration: {pairs[i + 1]}")
-                continue
-
-            url = metadata.get("url")
-
-            # Ensure videos list is long enough
-            if index > len(videos):
-                # Extend the list to include the index
-                while len(videos) < index:
-                    videos.append({})
-
-            # Get video segment
-            video_segment = videos[index]
-
-            # Add/remove clip
-            if duration == 0:
-                if timestamp in video_segment:
-                    video_segment.pop(timestamp)
-                    removed = True
-                    results.append(f"Clip deleted at {timestamp}")
-                else:
-                    results.append(f"No clip found at {timestamp}")
-                    continue
-            else:
-                video_segment[timestamp] = duration
-                removed = False
-                results.append(f"Clip added at {timestamp}")
-
-            lastVideoIndex = index
-
-        new_data = [metadata] + videos
-
-        # Save changes
-        data = new_data
-        with open(clip_file_names[message.channel.name], 'w') as file:
-            json.dump(data, file, indent=4)
-
-        await message.channel.send("\n".join(results))
-        return
-
-    # Single clip handling
-    if len(words) < 3:
-        await message.channel.send("Usage: [clip] [index] <timestamp> <duration>")
-        return
-
-    words[1] = words[1].replace(";", ":")
-    if ":" in words[1]:
-        timestamp = words[1]
-        index = lastVideoIndex
-    else:
-        try:
-            index = int(words[1]) - 1
-            if index < 0:
-                raise ValueError("Index must be greater than 0.")
-            timestamp = words[2]
-        except ValueError as e:
-            await message.channel.send(f"Invalid index: {e}")
-            return
-
-    try:
-        duration = int(words[-1])
-    except ValueError:
-        await message.channel.send("Duration must be an integer.")
-        return
-
-    metadata = data[0]
-    videos = data[1:]
-    url = metadata.get("url")
-
-    # Ensure videos list is long enough
-    if index >= len(videos):
-        while len(videos) <= index:
-            videos.append({})
-
-    video_segment = videos[index]
-
-    # Add/remove clip
-    removed = False
-    if duration == 0:
-        if timestamp in video_segment:
-            video_segment.pop(timestamp)
-            removed = True
-        else:
-            await message.channel.send(f"No clip found at {timestamp}")
-            return
-    else:
-        video_segment[timestamp] = duration
-
-    new_data = [metadata] + videos
-    # Save changes
-    data = new_data
-    with open(clip_file_names[message.channel.name], 'w') as file:
-        json.dump(data, file, indent=4)
-
-    lastVideoIndex = index
-
-    # Get link if possible
-    links = get_links(url)
-    if links and index - 1 < len(links):
-        link = links[index - 1]
-        time_param = f"&t={timestamp_to_sec(timestamp)}"
-    else:
-        link = "Failed to get video link"
-        time_param = ""
-
-    if removed:
-        await message.channel.send(f"Clip deleted at index {index+1} with timestamp {timestamp}")
-    else:
-        await message.channel.send(
-            f"Clip added/updated at index {index+1} with timestamp {timestamp} and duration {duration}s.\n{link}{time_param}")
-
-
-async def get_clips(message):
     words = message.content.split()
-    global clip_file_names
-    if len(words) < 2:
-        await message.channel.send("Usage: !>getclips <index>")
-        return
+    if not await check_with_err(len(words) < 3, "Usage: !>setoffset <part_number> <offset_value>", message): return
 
     try:
-        index = int(words[1]) - 1
-        if index < 0:
-            raise ValueError("Index must be greater than 0.")
-    except ValueError as e:
-        await message.channel.send(f"Invalid index: {e}")
+        part_number = int(words[1])
+        offset_value = int(words[2])
+    except ValueError:
+        await message.channel.send("Both part_number and offset_value must be integers")
         return
 
-    data = await ensure_clip_file_and_load(message)
-    if data is None:
-        return
+    data = await ensure_clip_file_and_load(message, await get_file_path_from_message(message))
+    if data is None: return
 
-    metadata = data[0]
-    videos = data[1:]
-
-    if index >= len(videos):
-        await message.channel.send(f"Index {index+1} is out of bounds. Maximum index is {len(videos)}.")
-        return
-
-    clips = videos[index-1]
-    if not isinstance(clips, dict):
-        await message.channel.send(f"Unexpected format in the clip file at index {index+1}.")
-        return
-
-    # Format clips for display
-    clips_str = "\n".join(
-        [f"{timestamp}: {duration}s" for timestamp, duration in clips.items()])
-    response = f"Clips for index {index+1}:\n{clips_str}"
-
-    await message.channel.send(f"```{response}```")
+    data = update_offset(data, part_number, offset_value)
+    save_json_to_filepath(data, clip_file_names[message.channel.name], False)
+    await message.channel.send(f"Offset for part {part_number} set to {offset_value}")
 
 
-async def get_all_clips(message):
+async def set_alias(message):
     global clip_file_names
+    words = message.content.split()
+    if not await check_with_err(len(words) < 2, "Usage: !>setalias <index> <alias> (or none to remove)", message): return
 
-    data = await ensure_clip_file_and_load(message)
+    try:
+        index = int(words[1])
+        alias = words[2] if len(words) > 2 else None
+    except ValueError:
+        await message.channel.send("Index must be an integer")
+        return
+
+    data = await ensure_clip_file_and_load(message, await get_file_path_from_message(message))
+    if data is None: return
+
+    data = update_alias(data, index, alias)
+    save_json_to_filepath(data, clip_file_names[message.channel.name], False)
+
+    if alias:
+        await message.channel.send(f"Alias for index {index} set to '{alias}'")
+    else:
+        await message.channel.send(f"Alias for index {index} removed")
+
+
+async def set_metadata(message):
+    global clip_file_names
+    """!>setmetadata <key> <value> - Update metadata fields (case-insensitive)"""
+    words = message.content.split()
+    if len(words) < 3:
+        await message.channel.send("Usage: !>setmetadata <key> <value>\n"
+                                   "Available keys: name, prefix, url, version")
+        return
+
+    data = await ensure_clip_file_and_load(message, await get_file_path_from_message(message))
     if data is None:
         return
 
     metadata = data[0]
-    videos = data[1:]
-    url = metadata.get("url")
+    key = words[1].lower()  # Normalize to lowercase
+    value = " ".join(words[2:])  # Join remaining words as value
 
-    links = get_links(url)
+    # List of allowed mutable metadata fields (excluding structural ones)
+    allowed_fields = {'name', 'prefix', 'url', 'version'}
 
-    if not videos:
-        await message.channel.send("No clips found.")
+    if key not in allowed_fields:
+        await message.channel.send(f"Invalid key. Allowed keys: {', '.join(sorted(allowed_fields))}")
         return
 
-    blocks = []
-    total_runtime = 0
-    index = 0
-    for clips in videos:
-        index += 1
-        if not isinstance(clips, dict):
-            continue
+    # Special handling for version (must be integer)
+    if key == 'version':
+        try:
+            value = int(value)
+        except ValueError:
+            await message.channel.send("Version must be an integer")
+            return
 
-        runtime = 0
-        clip_lines = []
+    # Update the field (using original case from metadata if exists)
+    original_case_key = next((k for k in metadata.keys() if k.lower() == key), key)
+    metadata[original_case_key] = value
 
-        # Add link if available
-        if links and index - 1 < len(links):
-            clip_lines.append(links[index - 1])
-        else:
-            clip_lines.append(f"Video {index} (link unavailable)")
+    save_json_to_filepath(data, clip_file_names[message.channel.name], False)
+    await message.channel.send(f"Metadata updated: {original_case_key} = {value}")
 
-        # Process clips
-        for timestamp, duration in clips.items():
-            seconds = timestamp_to_sec(timestamp) if ":" in timestamp else int(timestamp)
-            clip_lines.append(f"    {timestamp}: {duration}s")
-            runtime += duration
-
-        total_runtime += runtime
-        clip_block = f"Index {index} (runtime: {format_seconds(runtime)}):\n" + "\n".join(clip_lines)
-        blocks.append(f"```{clip_block}```")
-
-    # Send in chunks
-    max_length = 1900
-    current_block = ""
-    for block in blocks:
-        if len(current_block) + len(block) > max_length:
-            await message.channel.send(current_block)
-            current_block = ""
-            time.sleep(1)
-        current_block += block + "\n"
-
-    if current_block:
-        await message.channel.send(current_block)
-
-    await message.channel.send(f"Total runtime: {format_seconds(total_runtime)}")
+async def show_metadata_command(message):
+    return await show_metadata(message, await get_file_path_from_message(message))
 
 
-def format_seconds(seconds):
-    hours = seconds // 3600
-    minutes = (seconds % 3600) // 60
-    seconds = seconds % 60
-
-    parts = []
-    if hours > 0:
-        parts.append(f"{hours}")
-        parts.append(f"{minutes:02d}")
-    else:
-        if minutes > 0:
-            parts.append(f"{minutes}")
-    parts.append(f"{seconds:02d}")
-
-    return ":".join(parts)
-
-
-async def ensure_clip_file_and_load(message):
-    if message.channel.name not in clip_file_names or not os.path.exists(clip_file_names[message.channel.name]):
-        await message.channel.send("No clip configuration found. Use !>setclipfile to initialize.")
-        return None
-
-    data = load_clip_file(message)
-    if data is None:
-        await message.channel.send("Failed to load clip file.")
-        return None
-
-    valid, msg = validate_project_file(data)
-    if not valid:
-        await message.channel.send(f"Invalid file structure: {msg}")
-        return None
-
-    return data
-
+# !!!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[bindings]
 
 # Binding functions
 def bind_phrases():
@@ -772,6 +655,10 @@ def bind_commands():
         "getallclips": get_all_clips,
         "renderclips": render_clips,
         "seturl": set_url,
+        "setoffset": set_offset,
+        "setalias": set_alias,
+        "showmetadata": show_metadata_command,
+        "setmetadata": set_metadata
     }
 
 
@@ -791,5 +678,11 @@ def bind_help():
                 "Set duration=0 to delete clip",
         "getclips": "View clips for video. Usage: `!>getclips <index>`",
         "getallclips": "View all clips. Usage: `!>getallclips`",
-        "renderclips": "Start rendering. Usage: `!>renderclips [start] [end]`"
+        "renderclips": "Start rendering. Usage: `!>renderclips [start] [end]`",
+        "setoffset": "Set offset for part numbers. Usage: `!>setoffset <part_number> <offset_value>`\n"
+                     "Example: `!>setoffset 9 1` means part 9 is actually index 10 in playlist",
+        "setalias": "Set alias for an index. Usage: `!>setalias <index> <alias>`\n"
+                    "Example: `!>setalias 9 8.1` lets you use '8.1' instead of 9 in clip commands",
+        "showmetadata": "Shows metadata for the project file associated with this channel. Usage: `!>showmetadata`",
+        "setmetadata": "Update metadata fields. Use !>showmetadata first. Usage: !>setmetadata <key> <value>"
     }

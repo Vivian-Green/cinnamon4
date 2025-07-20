@@ -1,0 +1,33 @@
+# v0:
+# {
+# "https://www.youtube.com/watch?v=rLw2ndAW9NE&list=PLenI3Kbdx0D19iGG1nElWVp0GpI-cUHMQ": [
+#    {
+#        "prefix": "Part ",
+#        "name": "example",... [name optional]
+#    },
+#       {data},
+#       {data},...
+#   ]
+# }
+# v1:
+# [
+#   {
+#       "prefix": "Part ",
+#       "version": 1,
+#       "name": "example",
+#       "url": "https://www.youtube.com...list=...",
+#       "offsets: { # to be used in building clips: "clip 9" command with offset of 2 at 9+ would actually use index 11. Use highest offset index below given index arg
+#           9: 2
+#       },
+#       "aliases: { # aliases can be used as 2nd arg in clip command, !>setalias <index> [string or none to delete]
+#           9: "8.1", # aliases will be used in place of part numbers using playlist indices (not part numbers) when parsing. offsets used similarly for getting part numbers
+#           10: "8.2"
+#       }
+#   },
+#   {
+#       "0:00": 5,
+#       "1:23": 30,...
+#   },
+#   {data},
+#   {data},
+# ]
