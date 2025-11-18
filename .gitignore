@@ -7,3 +7,4 @@
 token.yaml
 /.idea
 *cache.json
+/plugins/yt_comment_ping/
