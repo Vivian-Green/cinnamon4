@@ -6,3 +6,4 @@
 *.pyc
 token.yaml
 /.idea
+*cache.json

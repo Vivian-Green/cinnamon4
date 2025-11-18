@@ -22,6 +22,8 @@ def get_default_cache():
         "trust_cache_time_seconds": 3600
     }
 
+# todo: once-over this and all sister files post refactor, lmao
+
 lastVideoRawIndex = 1
 
 get_links_memo = {}
@@ -57,7 +59,7 @@ def get_links(url):  # todo: this is already in tatoclip's common.py and has jus
     global trust_cache_time_seconds
 
     # Use memoized result if valid
-    if trust_links_memo_timestamp > time.time() and url in get_links_memo:
+    if time.time() < trust_links_memo_timestamp and url in get_links_memo:
         result = get_links_memo[url]
         if result: return result
 
@@ -117,8 +119,8 @@ async def clip(message):
         alias_or_index = words[1]
         effective_index, is_alias = resolve_alias_to_effective_index(data, alias_or_index)
 
-        if is_alias or effective_index > 0:
-            raw_index = effective_index if is_alias else get_raw_index(data, int(alias_or_index))
+        if is_alias or effective_index is not None:
+            raw_index = effective_index if is_alias else get_raw_index(data, effective_index)
             pairs_start = 2
 
     # If not determined yet, use lastVideoIndex
@@ -242,7 +244,6 @@ def format_part_info(data, raw_index):
 
     metadata = data[0]
     aliases = metadata.get("aliases", {})
-    offsets = metadata.get("offsets", {})
 
     # Calculate effective index
     effective_index = get_effective_index(data, raw_index)
@@ -291,32 +292,40 @@ async def get_clips(message):
     alias_or_index = words[1]
     effective_index, is_alias = resolve_alias_to_effective_index(data, alias_or_index)
 
+    if effective_index is None:
+        await message.channel.send(f"Invalid index or alias: {alias_or_index}")
+        return
+
     print("\n\n\n\n\n\njjjjjj\n\n\n\n\n\n")
 
-    # If not an alias, parse as raw index
-    if not is_alias and effective_index > 0:
-        try:
-            raw_index = get_raw_index(data, effective_index)
-            print(effective_index, raw_index, "\n\n\n\n")
-        except ValueError as e:
-            await message.channel.send(f"Invalid index: {e}")
-            return
-    else:
-        if not await check_with_err(not is_alias, f"Invalid index: {effective_index}", message): return
-        raw_index = effective_index
-        print("alias?")
+    # If not an alias, parse as effective index
+    raw_index = effective_index if is_alias else get_raw_index(data, effective_index)
+
+    formatted = await format_clips_for_video(data, raw_index)
+
+    if not formatted:
+        formatted = "No clips found for specified video"
+        await message.channel.send(f"```{formatted}```")
+        return
 
     metadata = data[0]
     videos = data[1:]
-    if not await check_with_err(raw_index < len(videos), f"Index {raw_index} is out of bounds. Maximum index is {len(videos)}.", message): return
+    if not await check_with_err(1 <= raw_index <= len(videos), f"Index {raw_index} is out of bounds. Maximum index is {len(videos)}.", message): return
 
     clips = videos[raw_index - 1]
     if not await check_with_err(isinstance(clips, dict), f"Unexpected format in the clip file at index {raw_index}.", message): return
 
-    formatted = await format_clips_for_video(data, raw_index)
-    if not formatted: formatted = "No clips found for specified video"
+    video_url = data[0].get("url")
+    links = get_links(video_url)
+    if links and raw_index <= len(links):
+        await message.channel.send(f"```{formatted}```" + f" \n{links[raw_index-1]}")
+        return
 
-    await message.channel.send(f"```{formatted}```")
+    # shouldn't be an accessible path?
+    await message.channel.send(f"```{formatted}```\n -# playlist link OOB err. Good job. How??")
+
+
+
 
 
 async def get_all_clips(message):
@@ -490,62 +499,35 @@ async def set_url(message):
 
 async def render_clips(message):
     words = message.content.split()
-    if message.channel.name not in clip_file_names and not await set_clip_file(message, ["!>setclipfile"]): return
+    if message.channel.name not in clip_file_names and not await set_clip_file(message, ["!>setclipfile"]): 
+        return
 
     # Ensure valid clip configuration
     data = await ensure_clip_file_and_load(message, await get_file_path_from_message(message))
-    if data is None: return
+    if data is None: 
+        return
 
     # Write data to targets JSON
     try:
-        save_json_to_filepath(data, targets_json_path, True)
-
         origin = os.path.basename(clip_file_names[message.channel.name])
         backup_path = os.path.join(os.path.dirname(targets_json_path), origin)
-
         save_json_to_filepath(data, backup_path, True)
     except Exception as e:
-        await message.channel.send(f"Error writing to targets.json: {e}")
+        await message.channel.send(f"Error writing backup: {e}")
         return
 
-    # Build command
-    command = ['python3', tatoclip_py_path]
-    arg1 = words[1] if len(words) > 1 else None
-    arg2 = words[2] if len(words) > 2 else None
-    message_errs = True and arg1
-
-    try:
-        arg1 = str(int(arg1)) if arg1 else "1"
-    except Exception as e:
-        arg1 = "1"
-        if message_errs:
-            await message.channel.send(f"Error on arg 1: {e}. Using default: 1")
-    command.append(arg1)
-
-    try:
-        if arg2:
-            arg2 = str(int(arg2) + 1)
-        else:
-            message_errs = False
-            playlist_length = 999
-            arg2 = str(playlist_length)
-    except Exception as e:
-        playlist_length = 999
-        arg2 = str(playlist_length)
-        if message_errs:
-            await message.channel.send(f"Error on arg 2: {e}. Using default: {999}")
-    command.append(arg2)
-
+    # Generate build command
+    build_script = "build_from.sh"
+    command = [f"./{build_script}", origin]
+    
     try:
         script_directory = os.path.dirname(tatoclip_py_path)
-        subprocess.Popen(
-            command,
-            cwd=script_directory,
-            shell=True
-        )
-        await message.channel.send(f"trying `{' '.join(command)}` o7")
+        full_command = f"cd '{script_directory}' && {' '.join(command)}"
+        
+        await message.channel.send(f"Run this command to build:\n```bash\n{full_command}\n```")
+        
     except Exception as e:
-        await message.channel.send(f"Error executing render command: {e}")
+        await message.channel.send(f"Error generating build command: {e}")
 
 
 
@@ -554,7 +536,7 @@ async def render_clips(message):
 async def set_offset(message):
     global clip_file_names
     words = message.content.split()
-    if not await check_with_err(len(words) < 3, "Usage: !>setoffset <part_number> <offset_value>", message): return
+    if not await check_with_err(len(words) == 3, "Usage: !>setoffset <part_number> <offset_value>", message): return
 
     try:
         part_number = int(words[1])
@@ -574,11 +556,11 @@ async def set_offset(message):
 async def set_alias(message):
     global clip_file_names
     words = message.content.split()
-    if not await check_with_err(len(words) < 2, "Usage: !>setalias <index> <alias> (or none to remove)", message): return
+    if not await check_with_err(len(words) >= 2, "Usage: !>setalias <index> <alias> (or none to remove)", message): return
 
     try:
-        index = int(words[1])
-        alias = words[2] if len(words) > 2 else None
+        effective_index = int(words[1])
+        alias = " ".join(words[2:]) if len(words) > 2 else None
     except ValueError:
         await message.channel.send("Index must be an integer")
         return
@@ -586,13 +568,14 @@ async def set_alias(message):
     data = await ensure_clip_file_and_load(message, await get_file_path_from_message(message))
     if data is None: return
 
-    data = update_alias(data, index, alias)
+    raw_index = get_raw_index(data, effective_index)
+    data = update_alias(data, raw_index, alias)
     save_json_to_filepath(data, clip_file_names[message.channel.name], False)
 
     if alias:
-        await message.channel.send(f"Alias for index {index} set to '{alias}'")
+        await message.channel.send(f"Alias for index {effective_index} set to '{alias}'")
     else:
-        await message.channel.send(f"Alias for index {index} removed")
+        await message.channel.send(f"Alias for index {effective_index} removed")
 
 
 async def set_metadata(message):
