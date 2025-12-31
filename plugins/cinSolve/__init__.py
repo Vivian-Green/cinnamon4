@@ -2,16 +2,14 @@
 # tokenizer, validateAgainstWhitelist and secureEval functions in this module written by https://github.com/Koenig-Heinrich-der-4te
 
 import math
+import re
 # this floods the namespace, I know, but this is intentional to allow expressions in /solve to not explicitly specify math.whatever()
 from math import *
 
-import discord
-
-from cinShared import *
+import cinAPI
 from cinIO import config
 from cinLogging import printHighlighted
 from cinPalette import *
-from cinShared import *
 
 badParenthesisRegex = r"\(([ \t\n])*(-)*([ \t\n\d])*\)"  # catches parenthesis that are empty, or contain only a number, including negative numbers
 
@@ -55,6 +53,13 @@ def secureEval(expression):
     else:
         return "Bad Math expression"
 
+def containsAny(textToCheck: str, texts):
+    # if textToCheck contains any of texts, return the length of the matching text, which is truthy unless text is ""
+    # else, return false
+    for text in texts:
+        if text in textToCheck.lower():
+            return len(text)
+    return False
 
 def validateAgainstBlacklist(expression):
     # check if eval contains bad words OR parenthesis with only whitespace
@@ -75,7 +80,7 @@ def insecureEval(expression):
     return evalResult
 
 
-async def solve_command(message: discord.Message):
+async def solve_command(message: cinAPI.APIMessage):
     messageContent = message.content
     # default offsets are for /solve
     myCharOffset = [7, 0]

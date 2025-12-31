@@ -84,6 +84,10 @@ View clips for video. Usage: `!>getclips <index>`
 ### renderclips
 Start rendering. Usage: `!>renderclips [start] [end]`
 
+### setalias
+Set alias for an index. Usage: `!>setalias <index> <alias>`
+Example: `!>setalias 9 8.1` lets you use '8.1' instead of 9 in clip commands
+
 ### setclipfile
 Initialize or configure clip settings. Usage:
 `!>setclipfile [filename.json] [playlist_url]`
@@ -93,5 +97,15 @@ Initialize or configure clip settings. Usage:
 • Auto-matches similar filenames
 • Defaults to `targets_[channelname].json`
 
+### setmetadata
+Update metadata fields. Use !>showmetadata first. Usage: !>setmetadata <key> <value>
+
+### setoffset
+Set offset for part numbers. Usage: `!>setoffset <part_number> <offset_value>`
+Example: `!>setoffset 9 1` means part 9 is actually index 10 in playlist
+
 ### seturl
 Add/update playlist URL. Usage: `!>seturl <playlist_url>`
+
+### showmetadata
+Shows metadata for the project file associated with this channel. Usage: `!>showmetadata`

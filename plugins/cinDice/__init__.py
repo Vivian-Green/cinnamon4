@@ -1,7 +1,7 @@
 import math
 import re
 import random
-import discord
+from cinAPI import APIMessage
 
 # todo: re-implement modifiers
 
@@ -82,7 +82,7 @@ def roll(command: str):
 
     return response
 
-async def rollWrapper(message: discord.message):
+async def rollWrapper(message: APIMessage):
     startOfRollText = message.content.lower().find("roll ")
     rollCommandText = message.content.lower()[startOfRollText:len(message.content.lower())]
 

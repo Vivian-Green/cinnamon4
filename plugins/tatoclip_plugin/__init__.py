@@ -4,7 +4,8 @@ import time
 import subprocess
 import traceback
 
-import discord
+#import discord
+import cinAPI
 from pytube import Playlist
 
 import cinIO
@@ -38,14 +39,14 @@ trust_cache_time_seconds = tatoclip_config["trust_cache_time_seconds"]
 clipping_mode = {}
 clip_file_names = {}
 
-async def get_file_path_from_message(message):
+async def get_file_path_from_message(message: cinAPI.APIMessage):
     global clip_file_names
     if message.channel.name not in clip_file_names or not os.path.exists(clip_file_names[message.channel.name]):
         await message.channel.send("No clip configuration found. Use !>setclipfile to initialize.")
         return None
     return clip_file_names[message.channel.name]
 
-async def check_with_err(condition: bool, warning: str, message: discord.message = None):
+async def check_with_err(condition: bool, warning: str, message: cinAPI.APIMessage = None):
     if condition: return True
     if message:
         await message.channel.send(warning)
@@ -81,7 +82,7 @@ def get_links(url):  # todo: this is already in tatoclip's common.py and has jus
 
 # !!!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[discord commands]
 
-async def clip_toggle(message):
+async def clip_toggle(message: cinAPI.APIMessage):
     global clipping_mode
 
     channel_id = str(message.channel.id)
@@ -90,7 +91,7 @@ async def clip_toggle(message):
     await message.channel.send(f"Clipping mode {status}.")
 
 
-async def clip(message):
+async def clip(message: cinAPI.APIMessage):
     words = message.content.lower().split()
     global clipping_mode, lastVideoRawIndex, clip_file_names
 
@@ -100,7 +101,7 @@ async def clip(message):
     elif not ("clip" in words[0]):
         return
 
-    if message.channel.name not in clip_file_names and not await set_clip_file(message, ["!>setclipfile"]): return
+    if message.channel.name not in clip_file_names and not await set_clip_fileW(message, ["!>setclipfile"]): return
 
     if len(words) > 1 and "toggle" in words[1]:
         await clip_toggle(message)
@@ -280,7 +281,7 @@ async def format_clips_for_video(data: list, raw_index: int) -> str:
     lines.extend(f"{timestamp}: {duration}s" for timestamp, duration in clips.items())
     return "\n".join(lines)
 
-async def get_clips(message):
+async def get_clips(message: cinAPI.APIMessage):
     words = message.content.split()
     global clip_file_names
     if not await check_with_err(len(words) >= 2, "Usage: !>getclips <index or alias>", message): return
@@ -328,7 +329,7 @@ async def get_clips(message):
 
 
 
-async def get_all_clips(message):
+async def get_all_clips(message: cinAPI.APIMessage):
     data = await ensure_clip_file_and_load(message, await get_file_path_from_message(message))
     if data is None:
         return
@@ -381,12 +382,14 @@ async def get_all_clips(message):
 
     await message.channel.send(f"Total runtime: {format_seconds(total_runtime)}")
 
+async def set_clip_file(message: cinAPI.APIMessage):
+    return await set_clip_fileW(message, None)
 
-async def set_clip_file(message, words=""):
+async def set_clip_fileW(message: cinAPI.APIMessage, words = None):
     global clip_file_names
     global lastVideoRawIndex
 
-    if words == "":
+    if words is None:
         words = (message.content.split())
     if len(words) < 2:  # ---------------------------------------------------------------------------------- infer filename from channel name if not supplied --- #
         words = ["!>setclipfile", f"targets_{message.channel.name}.json".replace("-", "_")]
@@ -462,7 +465,7 @@ async def set_clip_file(message, words=""):
     return True
 
 
-async def set_url(message):
+async def set_url(message: cinAPI.APIMessage):
     global clip_file_names
 
     if not await check_with_err(message.channel.name in clip_file_names,"No clip file configured. Use !>setclipfile first.", message):
@@ -497,9 +500,9 @@ async def set_url(message):
         return False
 
 
-async def render_clips(message):
+async def render_clips(message: cinAPI.APIMessage):
     words = message.content.split()
-    if message.channel.name not in clip_file_names and not await set_clip_file(message, ["!>setclipfile"]): 
+    if message.channel.name not in clip_file_names and not await set_clip_fileW(message, ["!>setclipfile"]):
         return
 
     # Ensure valid clip configuration
@@ -533,7 +536,7 @@ async def render_clips(message):
 
 
 
-async def set_offset(message):
+async def set_offset(message: cinAPI.APIMessage):
     global clip_file_names
     words = message.content.split()
     if not await check_with_err(len(words) == 3, "Usage: !>setoffset <part_number> <offset_value>", message): return
@@ -553,7 +556,7 @@ async def set_offset(message):
     await message.channel.send(f"Offset for part {part_number} set to {offset_value}")
 
 
-async def set_alias(message):
+async def set_alias(message: cinAPI.APIMessage):
     global clip_file_names
     words = message.content.split()
     if not await check_with_err(len(words) >= 2, "Usage: !>setalias <index> <alias> (or none to remove)", message): return
@@ -578,7 +581,7 @@ async def set_alias(message):
         await message.channel.send(f"Alias for index {effective_index} removed")
 
 
-async def set_metadata(message):
+async def set_metadata(message: cinAPI.APIMessage):
     global clip_file_names
     """!>setmetadata <key> <value> - Update metadata fields (case-insensitive)"""
     words = message.content.split()
@@ -617,7 +620,7 @@ async def set_metadata(message):
     save_json_to_filepath(data, clip_file_names[message.channel.name], False)
     await message.channel.send(f"Metadata updated: {original_case_key} = {value}")
 
-async def show_metadata_command(message):
+async def show_metadata_command(message: cinAPI.APIMessage):
     return await show_metadata(message, await get_file_path_from_message(message))
 
 

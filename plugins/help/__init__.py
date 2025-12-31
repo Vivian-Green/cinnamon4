@@ -1,6 +1,7 @@
 import os
-from bot import help_entries  # Changed from help_strings to help_entries
-
+#from bot import help_entries  # Changed from help_strings to help_entries
+import cinAPI
+import cinIO
 
 async def send_long_message(channel, content):
     """Helper function to send messages that may exceed Discord's limit"""
@@ -25,12 +26,14 @@ async def send_long_message(channel, content):
         await channel.send(current_chunk)
 
 
-async def help_command(message):
+async def help_command(message: cinAPI.APIMessage):
+    #return # todo: FIX: THIS IS TO AVOID CIRCULAR IMPORTS
     words = message.content.lower().split()
+
 
     # Build base command list grouped by plugin
     plugins_commands = {}
-    for cmd, entry in help_entries.items():
+    for cmd, entry in cinIO.help_entries.items():
         plugin_name = entry["plugin"]
         if plugin_name not in plugins_commands:
             plugins_commands[plugin_name] = []
@@ -52,7 +55,7 @@ async def help_command(message):
 
     if len(words) > 2:
         await message.channel.send(
-            help_entries["help"]["help"]  # Updated to use new structure
+            cinIO.help_entries["help"]["help"]  # Updated to use new structure
         )
         return
 
@@ -63,7 +66,7 @@ async def help_command(message):
         current_plugin = None
 
         # Sort commands by plugin then by command name
-        sorted_entries = sorted(help_entries.items(), key=lambda x: (x[1]["plugin"], x[0]))
+        sorted_entries = sorted(cinIO.help_entries.items(), key=lambda x: (x[1]["plugin"], x[0]))
 
         for cmd, entry in sorted_entries:
             if entry["plugin"] != current_plugin:
@@ -78,8 +81,8 @@ async def help_command(message):
                 await message.channel.send("Already dumped help this session! It'll just be the same!")
 
         await send_long_message(message.channel, complete_help)
-    elif words[1] in help_entries:
-        help_text = help_entries[words[1]]["help"]
+    elif words[1] in cinIO.help_entries:
+        help_text = cinIO.help_entries[words[1]]["help"]
         await send_long_message(message.channel, help_text)
     else:
         await message.channel.send(

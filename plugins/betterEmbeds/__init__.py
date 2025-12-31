@@ -1,5 +1,5 @@
 import re
-import discord
+import cinAPI as CinAPI
 from typing import Dict, List, Tuple, Optional
 
 MY_USER_ID = 888470282367565895  # Replace with actual support user ID
@@ -69,7 +69,7 @@ def find_and_fix_urls(content: str) -> List[Tuple[str, str]]:
     return replacements
 
 
-async def auto_fix_embeds(message: discord.Message):
+async def auto_fix_embeds(message: CinAPI.APIMessage):
     if message.author.bot:
         return
 
@@ -93,19 +93,18 @@ async def auto_fix_embeds(message: discord.Message):
     # Add reactions for feedback
     try:
         await reply_message.add_reaction("❌")
-    except discord.errors.Forbidden:
+    except:
         pass  # Bot doesn't have reaction permissions
 
 
-async def handle_embed_failed_reaction(reaction: discord.Reaction, user: discord.User):
+async def handle_embed_failed_reaction(reaction: CinAPI.APIReaction, user: CinAPI.APIUser):
     if user.bot:
         return
 
     message = reaction.message
-    original_message = message.reference.resolved if message.reference else None
 
     # is this the embed replacement message?
-    if not original_message or message.author != user.bot:
+    if message.author != user.bot:
         return
     if not message.content.startswith(EMBED_FIX_MESSAGE):
         return
@@ -149,7 +148,7 @@ async def handle_embed_failed_reaction(reaction: discord.Reaction, user: discord
     else:
         support_message = "No known alternatives available for these domains."
 
-    support_message += f"\n-# Oi! <@{MY_USER_ID}>! somefink ain't right with the embed unenshittification for {message.jump_url}\n hopefully that mirror is just down atm."
+    support_message += f"\n-# Oi! <@{MY_USER_ID}>! somefink ain't right with the embed unenshittification for {message.id}\n hopefully that mirror is just down atm."
 
     await message.channel.send(support_message)
 

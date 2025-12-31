@@ -1,15 +1,19 @@
 import math
 from datetime import datetime, timedelta
 import time
-import dateparser
-import discord
+import re
 
+import dateparser
 import cinIO
-from bot import loopDelay, client
+#from bot import loopDelay, client
 from cinLogging import printErr
-from cinShared import *
 
 from cinIO import config, overwriteCache, loadCache, userData
+
+from cinAPI import CinAPIManager
+import cinAPI
+
+api_manager = CinAPIManager()
 
 reminders = loadCache("reminders.json")
 
@@ -34,7 +38,7 @@ def relativeTimeToSeconds(relativeTimes):
     return total_relative_time
 
 
-def getTimeAndReminderText(message: discord.message, args):
+def getTimeAndReminderText(message: cinAPI.APIMessage, args):
     try:
         timeDiff = cinIO.getOrCreateUserData(str(message.author.id))["timezone"] * 3600 - time.timezone
         print(timeDiff)
@@ -74,12 +78,12 @@ def getTimeAndReminderText(message: discord.message, args):
     except Exception as e:
         printErr(f"Failed to get reminder time: \n{e}")
 
-async def newReminder(args, message):
-    # called directly from command
+async def newReminder(args, message: cinAPI.APIMessage):
     thisReminder = {
-        "userIDs": [message.author.id]
+        "userIDs": [message.author.id],
+        "client_name": message.client_name  # Store the client name with the reminder
     }
-
+    
     timeAndReminderText = ["0", "default"]
     timeAndReminderText[0], timeAndReminderText[1], isAbsoluteTime, isRelativeTime = getTimeAndReminderText(message, args)
 
@@ -111,20 +115,23 @@ async def newReminder(args, message):
         messageText = (
             f"Set a reminder at <t:{thisTime}> (<t:{thisTime}:R>) for \n"
             f"> {timeAndReminderText[1]}\n\n"
-            f"-# react to this message to also be pinged"
+            f"-# react 👉 to this message to also be pinged"
         )
 
         reminders[str(thisTime)] = thisReminder
         overwriteCache("reminders.json", reminders)
 
-        reminderMessage = await message.channel.send(messageText)
+        await message.channel.send(messageText)
 
-        await reminderMessage.add_reaction("👉") # we don't care if this works, but it goes in the try/catch anyway
+        print(reminders[str(thisTime)])
+
+        # todo: implement self pointy react in another way
+        # await reminderMessage.add_reaction("👉") # we don't care if this works, but it goes in the try/catch anyway
     except Exception as e:
         printErr(f"Failed to set reminder: {e}")
 
 
-async def reminderCommand(message: discord.Message):
+async def reminderCommand(message: cinAPI.APIMessage):
     args = message.content.split()[1:]
     if len(args) < 2:
         await message.channel.send("Usage: !reminder <time> <message>")
@@ -173,7 +180,13 @@ def getUserReminders(userID, requireAuthor = False):
     return theseReminders
 
 
-async def reminderMenu(message: discord.message):
+async def reminderMenu(message: cinAPI.APIMessage):
+    # Use the client from the triggering message
+    client = api_manager.get_client(message.client_name)
+    if not client:
+        print(f"Client {message.client_name} not found")
+        return
+
     minute = 60
     hour = minute * 60
     day = hour * 24
@@ -224,7 +237,13 @@ async def reminderMenu(message: discord.message):
         print(emoji_letter)
         await myMessage.add_reaction(emoji_letter)
 
-async def handleReminderMenuReaction(reaction, user):
+async def handleReminderMenuReaction(reaction: cinAPI.APIReaction, user: cinAPI.APIUser):
+    # Get client from the reaction's message
+    client = api_manager.get_client(reaction.message.client_name)
+    if not client:
+        print(f"Client {reaction.message.client_name} not found")
+        return
+        
     i = ord(reaction.emoji) - ord('🇦')  # 0-25 for a-z regional indicators
     staleMessageTimeDelta = timedelta(seconds=60)  # todo: move to config
 
@@ -267,41 +286,48 @@ async def handleReminderMenuReaction(reaction, user):
     await reaction.message.edit(content="> old reminder menu, `!>reminders` to re-open")
 
 
-
-async def checkForReminders():
+async def checkForReminders() -> None:
+    # print("reminder loop...")
     closestReminderTime, lateReminders = getReminderStatus()
 
     for reminder in lateReminders:
-        if not (isinstance(reminder["userIDs"], list) and len(reminder["userIDs"]) > 0): # todo: flag for deletion
-            print("wher users for this one?")
+        if not (isinstance(reminder["userIDs"], list) and len(reminder["userIDs"]) > 0):
+            print("Missing users for reminder")
             continue
 
-        channel = client.get_channel(reminder["channelID"])
-        author = client.get_user(reminder["userIDs"][0])
+        client = api_manager.get_client(reminder.get("client_name", "discord"))
+        if not client:
+            print(f"Client {reminder.get('client_name')} not found for reminder")
+            continue
 
-        # Format the base message
-        if reminder["text"] != "":
-            messageText = f'{author.mention} reminder: \n> {reminder["text"]}'
+        author_id = reminder["userIDs"][0]
+        recipient = await client.get_user_by_id(author_id) # assume is DM if can't find channel
+
+        if reminder["text"]:
+            messageText = f'<@{author_id}> reminder: \n> {reminder["text"]}'
         else:
-            messageText = f'{author.mention} reminder: \n> {"default text :3"}'
+            messageText = f'<@{author_id}> reminder: \n> {"default text :3"}'
 
-        # Send the message to the channel or direct to the author
-        recipient = author
+        channel = await client.get_channel_by_id(reminder["channelID"])
         if channel:
-            recipient = channel
-            # Mention all non-author users
-            mentions = [f"<@{userID}>" for userID in reminder["userIDs"][1:]]  # Skip the author (first user)
-            if len(mentions) > 0:
-                if len(mentions) > 50: mentions = mentions[:49]  # todo: fix magic 50 user cap for this. Shouldn't be hit, but like, magic.
-                messageText += "\n\n-# " + " ".join(mentions)  # Append non-author mentions
+            mentions = [f"<@{userID}>" for userID in reminder["userIDs"][1:]]
+            if mentions:
+                if len(mentions) > 50: mentions = mentions[:49]
+                messageText += "\n\n-# " + " ".join(mentions)
+            await channel.send(messageText)
         else:
             messageText += "react to snooze for 20m"
+            message = await recipient.send(messageText)
+            await message.add_reaction("👉")
 
-        message = await recipient.send(messageText)
 
-        await message.add_reaction("👉")
-
-async def handleReminderReaction(reaction, user):
+async def handleReminderReaction(reaction: cinAPI.APIReaction, user: cinAPI.APIUser = None):
+    # Get client from the reaction's message
+    client = api_manager.get_client(reaction.message.client_name)
+    if not client:
+        print(f"Client {reaction.message.client_name} not found")
+        return
+        
     if not (reaction and reaction.message): return
     message = reaction.message
 

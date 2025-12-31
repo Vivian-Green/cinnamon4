@@ -2,7 +2,7 @@ adminGuild: 419668441012633602
 bigNumber: 999999999999
 debugMessageChannelID: '436046444823314432'
 defaultLoggingHtml: assets/defaultLoggingHTML.html
-loopDelay: 5
+loopDelay: 10
 prefix: '!>'
 secureSolve: true
 solveBlacklist:

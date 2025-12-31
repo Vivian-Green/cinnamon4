@@ -7,6 +7,7 @@ import time
 
 cachePath = os.path.join(os.path.dirname(__file__), str("cache/"))
 configsPath = os.path.join(os.path.dirname(__file__), str("configs/"))
+help_entries = {}
 
 def ensureDirs(dirs):
     for directory in dirs:
@@ -102,8 +103,6 @@ userData should look like:
     }
 }
 '''
-
-# todo: function to add a user to userData
 
 def newUserData(userID: str):
     # use cinnamon's timezone as default- get hyucked people that actually use cinmin

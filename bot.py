@@ -1,44 +1,43 @@
-print("bot starting...")
-cinnamonVersion = "4.0.0"
-description = "Multi-purpose bot that does basically anything I could think of"
+# bot.py
+import cinIO
+from cinIO import config
 
-# changelog in README.txt
+cinnamonVersion = "4.1.0"
+description = "Multi-purpose bot that does basically anything I could think of"
 
 debugSettings = {
     "doReminders": True
 }
 
+def hardCodedClientImport(): # todo: replace with discovery in api_contexts, similar to how plugins are loaded
+    import api_contexts.discord_api
+    api_contexts.discord_api.make_client("discord")
+
 # !!!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[DEFINITIONS & IMPORTS]
 
 import os.path
 import traceback
-
 import time
 from datetime import datetime
-
 import asyncio
-import discord
-import discord.ext
-from discord.ext import tasks
-
-import cinLogging  # logging import changed to only import warning to prevent confusion here
-from cinLogging import printHighlighted, printDefault, printLabelWithInfo, printErr
-from cinIO import config, token
-from cinPalette import *
-
+import inspect
 import importlib.util
 from pathlib import Path
-from typing import Dict, Callable
+from typing import Dict, Callable, get_type_hints
 
-os.system("color")
+import cinAPI
+import cinLogging
+from cinLogging import printHighlighted, printDefault, printLabelWithInfo, printErr
+from cinPalette import *
+
+# todo: log matches to handlers
+
+# !!!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[GLOBAL STATE]
 
 commands: Dict[str, Callable] = {}
 phrases: Dict[str, Callable] = {}
 reactionhandlers: Dict[str, Callable] = {}
-help_entries: Dict[str, Dict[str, str]] = {}
 loopfunctions = []
-
-client = discord.Client(intents=discord.Intents.all(), max_messages=100)
 
 playlistURLs = []
 initTime = datetime.now().replace(microsecond=0)
@@ -50,9 +49,34 @@ adminGuild = config["adminGuild"]
 loopDelay = config["loopDelay"]
 bigNumber = config["bigNumber"]
 
+# !!!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[VALIDATION]
+
+def validate_handler(fn, expected_args: int, name: str, expected_types: list = None):
+    sig = inspect.signature(fn)
+
+    if len(sig.parameters) != expected_args:
+        raise TypeError(
+            f"{name} has wrong arity: expected {expected_args}, got {len(sig.parameters)}"
+        )
+
+    hints = get_type_hints(fn)
+    if not hints:
+        raise TypeError(
+            f"{name} must use explicit generic types (no implicit typing allowed)"
+        )
+
+    param_types = list(hints.values())
+
+    if expected_types is not None:
+        for i, (actual_type, expected_type) in enumerate(zip(param_types, expected_types)):
+            if actual_type != expected_type:
+                raise TypeError(
+                    f"{name}: parameter {i + 1} must be type {expected_type.__name__}, not {actual_type}"
+                )
+
 # !!!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[MESSAGE HANDLERS]
 
-async def handlePrompts(message, messageContent):
+async def handlePrompts(message: cinAPI.APIMessage, messageContent: str):
     global phrases
 
     for phrase, func in phrases.items():
@@ -70,26 +94,23 @@ async def handlePrompts(message, messageContent):
                 printErr(f"err in {func}: {e}")
             return
 
-
-async def handleRegularMessage(message: discord.message):
+async def handleRegularMessage(message: cinAPI.APIMessage):
     global Nope
     messageContent = message.content
 
     await cinLogging.tryToLog(message)
-    ImAwakeAndNotTalkingToABot = Nope <= 0 and not message.author.bot
 
+    ImAwakeAndNotTalkingToABot = True
     if ImAwakeAndNotTalkingToABot:
         await handlePrompts(message, messageContent)
     else:
-        # sleepy prompts
         Nope -= 1
         if "arise, cinnamon" in messageContent.lower():
             await message.channel.send("'mornin'!")
             Nope = 0
 
-async def handleCommand(message):
+async def handleCommand(message: cinAPI.APIMessage):
     global commands
-    print(commands)
     messageContent = message.content
     words = messageContent.lower().split(" ")
 
@@ -98,184 +119,305 @@ async def handleCommand(message):
 
     message_command = words[0][len(bot_prefix):]
 
-    print(f"'{message_command}'")
-
-    if not message_command in commands.keys():
-        print(f"{message_command} not in commands!")
+    if message_command not in commands:
         return
 
-    for cmd, func in commands.items():
-        if cmd == message_command:
-            try:
-                await func(message)
-            except Exception as e:
-                printErr(f"Command '{cmd}' failed:")
-                printErr(f"  Error: {e}")
-                printErr("  Full traceback:")
-                printErr(traceback.format_exc())  # <-- This prints the full stack trace
-                # Optionally, notify the user (if you don't want silent failures)
-                await message.channel.send(f"❌ Command failed: `{cmd}`\n```{type(e).__name__}: {e}```")
-            return
+    try:
+        await commands[message_command](message)
+    except Exception as e:
+        printErr(f"Command '{message_command}' failed:")
+        printErr(f"  Error: {e}")
+        printErr("  Full traceback:")
+        printErr(traceback.format_exc())
+        await message.channel.send(
+            f"❌ Command failed: `{message_command}`\n```{type(e).__name__}: {e}```"
+        )
 
 # !!!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[STATUS]
 
 lastStatusUpdateTime = 0
+
 async def handleStatusUpdate():
+    # printHighlighted(f"handling status update...")
     global lastStatusUpdateTime
     lastStatusUpdateTime = time.time()
 
-    # every minute, update status
     rn = datetime.now()
     thisHour = rn.hour
     thisMinute = rn.minute
     amOrPm = "am"
+
     if thisHour > 12:
         amOrPm = "pm"
         thisHour -= 12
     if thisHour == 0:
         thisHour = 12
-
     if thisMinute < 10:
-        thisMinute = "".join(["0", str(thisMinute)])
+        thisMinute = f"0{thisMinute}"
 
-    printHighlighted(f"status updated at {thisHour}:{thisMinute}{amOrPm}")
-    await client.change_presence(activity=discord.Game(f'online @{thisHour}:{thisMinute}{amOrPm} PST'))
+    clients = cinAPI.get_all_clients()
+    for client_name, client in clients.items():
+        try:
+            await client.set_presence(f'online @{thisHour}:{thisMinute}{amOrPm} PST')
+        except Exception as e:
+            printErr(f"err in set_presence: {e}")
 
-# !!!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[DISCORD EVENTS]
 
-@client.event
-async def on_ready():
+# !!!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[cinAPI EVENTS]
+
+@cinAPI.register_ready_handler
+async def on_ready(client: cinAPI.APIClient):
     global initTimeSession
     initTimeSession = datetime.now().replace(microsecond=0)
 
     printHighlighted(f"{fiveLines}Login Successful!")
     printLabelWithInfo("  Name", client.user.name)
     printLabelWithInfo("  ID", client.user.id)
-    printLabelWithInfo("  Discord.py version", discord.__version__)
     printLabelWithInfo("  Cinnamon version", cinnamonVersion)
     printDefault(fiveLines)
 
-    try:
-        nonDiscordLoop.start()
-    except asyncio.CancelledError:
-        printErr("Non-Discord loop is already running.")
-    except Exception as err:
-        printErr(repr(err))
-        printErr(traceback.format_exc())
-
-
-@client.event
-async def on_message(message):
+@cinAPI.register_message_handler
+async def on_message(message: cinAPI.APIMessage):
+    # traceback.print_stack()
     if message.content.startswith(bot_prefix):
         await handleCommand(message)
     else:
         await handleRegularMessage(message)
 
-
-@client.event
-async def on_reaction_add(reaction, user):
-    global reactionhandlers
+@cinAPI.register_reaction_handler
+async def on_reaction(reaction: cinAPI.APIReaction, user: cinAPI.APIUser):
     if user.bot:
         return
     if not reaction.message.author.bot:
         return
-    reactedMsgContent = reaction.message.content.lower()
-    #print(reactedMsgContent)
+
+    message = reaction.message
+    lowerContent = message.content.lower()
     for phrase, func in reactionhandlers.items():
-        #print(phrase)
-        if phrase in reactedMsgContent:
-            #print("YOOO")
+        if phrase in lowerContent:
             try:
                 await func(reaction, user)
             except Exception as e:
                 printErr(f"err in {func}: {e}")
             return
 
+# !!!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[LOOP]
 
-@tasks.loop(seconds=loopDelay)
-async def nonDiscordLoop():
-    global debugSettings
+async def loop():
+    # to give clients a bit to start up, skip first cycle
+    await asyncio.sleep(loopDelay)
+
     global lastStatusUpdateTime
-    global loopfunctions
-
-    if time.time() - lastStatusUpdateTime > (60 - loopDelay / 2): await handleStatusUpdate()
-
-    for func in loopfunctions:
+    #print("loop started!")
+    while True:  # Add a loop to run continuously
         try:
-            await func()
-        except Exception as e:
-            printErr(f"err in {func}: {e}")
+            #print("yo")
+            #print(f"loop functions: {loopfunctions}")
+            if time.time() - lastStatusUpdateTime > (60 - loopDelay / 2):
+                await handleStatusUpdate()
 
+            for func in loopfunctions:
+                #print(func)
+                try:
+                    await func()
+                except Exception as e:
+                    printErr(f"err in {func}: {e}")
+        except Exception as e:
+            printErr(f"err in loop: {e}")
+            traceback.print_exc()
+
+        await asyncio.sleep(loopDelay)  # Wait before next iteration
+
+# !!!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[PLUGINS]
+
+def load_dictionary_component(
+        module,
+        bind_method_name,
+        component_type,
+        storage,
+        validation_func,
+        validation_args,
+        plugin_dir
+):
+    """Load dictionary-based components (commands, phrases, reactions)."""
+    if not hasattr(module, bind_method_name):
+        return False
+
+    cinLogging.printInBoxP(f"{highlightedColor} found {component_type}...", LARGE_WINDOW)
+    attempted = success = 0
+
+    try:
+        items = getattr(module, bind_method_name)()
+        for name, fn in items.items():
+            attempted += 1
+            try:
+                arg_count, desc, arg_types = validation_args
+                desc_formatted = desc.format(name=name)
+                validation_func(fn, arg_count, desc_formatted, arg_types)
+                storage[name] = fn
+                success += 1
+            except Exception as e:
+                cinLogging.printInBoxP(
+                    f"Failed to load {component_type[:-1]} '{name}':\n   {e}",
+                    ERROR_BOX
+                )
+
+        cinLogging.printLoadStatus(f"  {component_type}", success, attempted)
+        return True
+
+    except Exception as e:
+        cinLogging.printInBoxP(
+            f"{errorColor}Error in {bind_method_name}() for plugin {plugin_dir}:\n   {e}",
+            ERROR_BOX
+        )
+        return False
 
 def load_plugins():
     global commands, phrases, reactionhandlers, loopfunctions
-    printHighlighted(f"{fiveLines}Loading plugins...")
-    plugins_dir = Path("./plugins")
 
-    # Iterate through all directories in the plugins folder
+    # header
+    print(fiveLines)
+    cinLogging.printBoxBorderP(HEADER_BOX_BORDER)
+    cinLogging.printInBoxP(f"    Loading plugins...", HEADER_BOX)
+    cinLogging.printBoxBorderP(HEADER_BOX_BORDER)
+
+    plugins_dir = Path("./plugins")
     for plugin_dir in plugins_dir.iterdir():
-        printLabelWithInfo("  plugin", plugin_dir)
         if not plugin_dir.is_dir():
             continue
 
-        # Check if the directory has an __init__.py file
+        print()
+        cinLogging.printBoxBorderP(LARGE_WINDOW_BORDER)
+        cinLogging.printInBoxP(f" plugin: {plugin_dir.name}", LARGE_WINDOW_HEADER)
+        cinLogging.printBoxBorderP(LARGE_WINDOW_BORDER)
+
         init_file = plugin_dir / "__init__.py"
         if not init_file.exists():
             printErr(f"no __init__ in plugin {plugin_dir}")
+            cinLogging.printBoxBorderP(LARGE_WINDOW)
             continue
 
-        # Create the module spec and import it
         module_name = f"plugins.{plugin_dir.name}"
         spec = importlib.util.spec_from_file_location(module_name, init_file)
         if spec is None:
+            printErr(f"Failed to create spec for plugin {plugin_dir}")
+            cinLogging.printBoxBorderP(LARGE_WINDOW)
             continue
 
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)  # type: ignore
+        try:
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)  # type: ignore
+        except Exception as e:
+            printErr(f"Failed to import plugin {plugin_dir}: {e}")
+            cinLogging.printBoxBorderP(LARGE_WINDOW)
+            continue
 
-        # Call the bind functions if they exist
+        # -------------------- Commands --------------------
         if hasattr(module, "bind_commands"):
-            cmd_dict = module.bind_commands()
-            if isinstance(cmd_dict, dict):
-                commands.update(cmd_dict)
-                printLabelWithInfo("    commands", cmd_dict)
-            else:
-                printErr(f"bind_commands() in plugin {plugin_dir} returned invalid data? {cmd_dict}")
+            load_dictionary_component(
+                module, "bind_commands", "commands", commands,
+                validate_handler, (1, "command '{name}'", [cinAPI.APIMessage]), plugin_dir
+            )
 
+        # -------------------- Phrases --------------------
         if hasattr(module, "bind_phrases"):
-            phrase_dict = module.bind_phrases()
-            if isinstance(phrase_dict, dict):
-                phrases.update(phrase_dict)
-                printLabelWithInfo("    prompts", phrase_dict)
-            else:
-                printErr(f"bind_phrases() in plugin {plugin_dir} returned invalid data? {phrase_dict}")
+            load_dictionary_component(
+                module, "bind_phrases", "phrases", phrases,
+                validate_handler, (1, "phrase '{name}'", [cinAPI.APIMessage]), plugin_dir
+            )
 
+        # -------------------- Reactions --------------------
         if hasattr(module, "bind_reactions"):
-            reactionhandler = module.bind_reactions()
-            if isinstance(reactionhandler, dict):
-                reactionhandlers.update(reactionhandler)
-                printLabelWithInfo("    reaction handlers:", reactionhandler)
-            else:
-                printErr(f"bind_reactions() in plugin {plugin_dir} returned invalid data? {reactionhandler}")
+            load_dictionary_component(
+                module, "bind_reactions", "reactions", reactionhandlers,
+                validate_handler, (2, "reaction '{name}'", [cinAPI.APIReaction, cinAPI.APIUser]), plugin_dir
+            )
 
-        if hasattr(module, "bind_help"):
-            plugin_help = module.bind_help()
-            plugin_name = plugin_dir.name
-            if isinstance(plugin_help, dict):
-                for cmd, help_text in plugin_help.items():
-                    help_entries[cmd] = {
-                        "help": help_text,
-                        "plugin": plugin_name
-                    }
-                printLabelWithInfo("    help entries:", f"{len(plugin_help)} from {plugin_name}")
-            else:
-                printErr(f"bind_help() in plugin {plugin_name} returned invalid data? {plugin_help}")
-
+        # -------------------- Loop --------------------
         if hasattr(module, "bind_loop"):
-            loopy = module.bind_loop()
-            loopfunctions.append(loopy)
-            printLabelWithInfo("    loop function:", loopy)
+            cinLogging.printInBoxP(f"{highlightedColor} found loops...", LARGE_WINDOW)
+            attempted = success = 1
+            try:
+                loopy = module.bind_loop()
+                try:
+                    validate_handler(loopy, 0, "loop function")
+                    loopfunctions.append(loopy)
+                except Exception as e:
+                    success = 0
+                    cinLogging.printInBoxP(f"Failed to load loop function:\n   {e}", ERROR_BOX)
+                cinLogging.printLoadStatus("  loop function", success, attempted)
+            except Exception as e:
+                cinLogging.printInBoxP(f"Error in bind_loop() for plugin {plugin_dir}:\n   {e}", ERROR_BOX)
 
-load_plugins()
+        # -------------------- Help --------------------
+        if hasattr(module, "bind_help"):
+            cinLogging.printInBoxP(f"{highlightedColor} found help...", LARGE_WINDOW)
+            attempted = success = 0
+            try:
+                entries = module.bind_help()
+                for cmd, text in entries.items():
+                    attempted += 1
+                    cinIO.help_entries[cmd] = {
+                        "help": text,
+                        "plugin": plugin_dir.name
+                    }
+                    success += 1
+                cinLogging.printLoadStatus("  help entries", success, attempted)
+            except Exception as e:
+                cinLogging.printInBoxP(f"Error in bind_help() for plugin {plugin_dir}:\n   {e}", ERROR_BOX)
 
-client.run(token)
+        cinLogging.printBoxBorderP(LARGE_WINDOW_BORDER)
+
+async def main():
+    os.system("color")
+    cinLogging.printBoxBorder(0, 130, debugColor)
+    print("      bot starting...")
+    load_plugins()
+    print("      loop started!")
+    print(f"      loop delay: {loopDelay} seconds")
+
+    # box parameters
+    boxIndentation = 3
+    indentation = 3
+    boxWidth = 120
+    boxWidthMagic = boxWidth + 14
+
+    # header
+    print(fiveLines)
+    cinLogging.printBoxBorderP(HEADER_BOX_BORDER)
+    cinLogging.printInBoxP(f"    Loading clients...", HEADER_BOX)
+    cinLogging.printBoxBorderP(HEADER_BOX_BORDER)
+
+    # Client loading box
+    print()
+    cinLogging.printBoxBorderP(LARGE_WINDOW_BORDER)
+    cinLogging.printInBoxP(f" Initializing clients...", LARGE_WINDOW_HEADER)
+    cinLogging.printBoxBorderP(LARGE_WINDOW_BORDER)
+
+    hardCodedClientImport()
+
+    # Get all registered clients
+    clients = cinAPI.get_all_clients()
+
+    # Start all clients concurrently
+    tasks = []
+    for client_name, client in clients.items():
+        cinLogging.printInBoxP(f"Starting client: {client_name}", LARGE_WINDOW)
+        task = asyncio.create_task(client.start_client())
+        tasks.append(task)
+    cinLogging.printBoxBorderP(LARGE_WINDOW_BORDER)
+    print(fiveLines)
+    cinLogging.printBoxBorderP(LARGE_WINDOW_BORDER)
+    print()
+
+    # wait for all tasks and loop
+    print(f"starting loop every {loopDelay} seconds, {len(loopfunctions)} loop functions: {loopfunctions}")
+    # loop loop every loopDelay seconds
+    loop_task = asyncio.create_task(loop(), name="loop_task")
+    print(loop_task)
+    tasks.append(loop_task)
+
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+if __name__ == "__main__":
+    asyncio.run(main())
