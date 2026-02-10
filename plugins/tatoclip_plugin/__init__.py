@@ -237,7 +237,9 @@ async def handle_batch_clips(message, data, raw_index, pairs_start) -> (list, st
     url = current_data[0].get("url")
     links = get_links(url)
     if links and raw_index <= len(links):
-        results.append(f"\nVideo reference: {links[raw_index - 1]}")
+        video_id = links[raw_index - 1].split('v=')[1].split('&')[0]
+        thumbnail_url = f"[.](https://img.youtube.com/vi/{video_id}/default.jpg)"
+        results.append(f"\nVideo reference: {thumbnail_url} https://vivianswebsite.neocities.org/redirect?v={video_id}")
 
     return current_data, "\n".join(results)
 
@@ -280,7 +282,7 @@ async def format_clips_for_video(data: list, raw_index: int) -> str:
 
     lines = [part_info]
     if links and raw_index <= len(links):
-        lines.append(f"Video URL: {links[raw_index - 1]}")
+        lines.append(f"Video reference: {links[raw_index - 1]}")
 
     lines.extend(f"{timestamp}: {duration}s" for timestamp, duration in clips.items())
     return "\n".join(lines)
@@ -323,7 +325,10 @@ async def get_clips(message: cinAPI.APIMessage):
     video_url = data[0].get("url")
     links = get_links(video_url)
     if links and raw_index <= len(links):
-        await message.channel.send(f"```{formatted}```" + f" \n{links[raw_index-1]}")
+        # await message.channel.send(f"```{formatted}```" + f" \n{links[raw_index-1]}?app=desktop")
+        video_id = links[raw_index - 1].split('v=')[1].split('&')[0]
+        thumbnail_url = f"[.](https://img.youtube.com/vi/{video_id}/default.jpg)"
+        await message.channel.send(f"```{formatted}```\n{thumbnail_url} https://vivianswebsite.neocities.org/redirect?v={video_id}")
         return
 
     # shouldn't be an accessible path?
