@@ -92,6 +92,9 @@ async def clip_toggle(message: cinAPI.APIMessage):
 
 
 async def clip(message: cinAPI.APIMessage):
+    debug_clip_command = True
+    if debug_clip_command: print(f"clip command received while debug_clip_command = True")
+
     words = message.content.lower().split()
     global clipping_mode, lastVideoRawIndex, clip_file_names
 
@@ -155,6 +158,7 @@ async def clip(message: cinAPI.APIMessage):
 
     if results:
         await message.channel.send(results)
+    if debug_clip_command: print(f"end clip command while debug_clip_command = True")
 
 
 def process_single_clip(data: list, raw_index: int, timestamp: str, duration: int) -> tuple:

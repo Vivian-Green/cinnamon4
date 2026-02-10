@@ -17,7 +17,10 @@ def getURLs(string):
 
 def getLogFilePath(message: APIMessage) -> str:
     # Use guild name if available, otherwise use "DM"
-    guild_name = str(message.guild) if message.guild else "DM"
+    guild_name = "DM"
+    if message.guild:
+        guild_name = str(message.guild.name)
+
 
     # Use channel ID for uniqueness in DMs
     channel_identifier = str(message.channel.name) if message.guild else f"dm_{message.channel.name}"

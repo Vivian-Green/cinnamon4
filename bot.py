@@ -2,7 +2,7 @@
 import cinIO
 from cinIO import config
 
-cinnamonVersion = "4.1.0"
+cinnamonVersion = "4.1.1"
 description = "Multi-purpose bot that does basically anything I could think of"
 
 debugSettings = {
@@ -96,6 +96,10 @@ async def handlePrompts(message: cinAPI.APIMessage, messageContent: str):
 
 async def handleRegularMessage(message: cinAPI.APIMessage):
     global Nope
+
+    if message.author.bot:
+        return
+
     messageContent = message.content
 
     await cinLogging.tryToLog(message)
@@ -111,6 +115,9 @@ async def handleRegularMessage(message: cinAPI.APIMessage):
 
 async def handleCommand(message: cinAPI.APIMessage):
     global commands
+    if message.author.bot:
+        return
+
     messageContent = message.content
     words = messageContent.lower().split(" ")
 

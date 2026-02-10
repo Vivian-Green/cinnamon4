@@ -15,9 +15,25 @@ CLIENT_NAME = "discord"
 
 # ---------- ADAPTER OBJECTS ----------
 
+
 class DiscordUser:
     def __init__(self, user: Union[discord.User, discord.Member]):
         self._u = user
+
+    async def send(self, content: str, *args, **kwargs) -> None: # todo: DRY
+        """Send DM with automatic splitting for Discord limits"""
+        try:
+            parts = cinAPI.split_message(content)
+
+            for i, part in enumerate(parts):
+                if i == 0:
+                    await self._u.send(part, *args, **kwargs)
+                else:
+                    await self._u.send(part)
+
+        except Exception as e:
+            print(f"Failed to send DM: {e}")
+            raise
 
     @property
     def id(self) -> int:
@@ -41,9 +57,6 @@ class DiscordUser:
             return str(self._u.color)
         return None
 
-    async def send(self, content: str):
-        await self._u.send(content)
-
 channel_id_names_dict = {}
 
 
@@ -55,8 +68,32 @@ class DiscordChannel:
         self._id = channel.id
         self.client_name = CLIENT_NAME
 
-    async def send(self, content: str) -> None:
-        await self._c.send(content)
+    async def send(self, content: str, *args, **kwargs) -> None: # todo: DRY
+        """Send message with automatic splitting for Discord limits"""
+        debug_send_function = True
+
+        if debug_send_function: print("starting to send message while debug_send_function is true")
+        try:
+            # Handle both regular messages and embeds/files
+            parts = cinAPI.split_message(content)
+
+            for i, part in enumerate(parts):
+                if debug_send_function:
+                    print(f"part {i+1} of {len(parts)}: '{part}'")
+
+                if i == 0:
+                    # First part gets all original args/kwargs
+                    await self._c.send(part, *args, **kwargs)
+                else:
+                    # Subsequent parts only get content to avoid duplicating embeds/files
+                    await self._c.send(part)
+
+        except Exception as e:
+            print(f"Failed to send message: {e}")
+            # Re-raise to allow higher-level error handling
+            raise
+
+        if debug_send_function: print("finished sending message while debug_send_function is true")
 
     @property
     def id(self) -> int:

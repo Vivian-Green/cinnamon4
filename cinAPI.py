@@ -5,7 +5,7 @@ import logging
 from cinPalette import LARGE_WINDOW
 
 
-# !!!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[ discord.py shaped things
+# !!!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[ definitely not discord.py shaped things
 
 class APIUser(Protocol):
     id: int
@@ -27,7 +27,6 @@ class APIChannel(Protocol):
 
     async def send(self, content: str) -> None: ...
 
-
 class APIMessage(Protocol):
     content: str
     author: APIUser
@@ -42,7 +41,6 @@ class APIMessage(Protocol):
     async def reply(self, reply_text,mention_author):
         # gets message context, to send a message in the same channel
         ...
-
 
 class APIReaction(Protocol):
     message: APIMessage
@@ -81,6 +79,36 @@ class APIClient(Protocol):
 # !!!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[ actual cinAPI code:
 
 logger = logging.getLogger(__name__)
+
+
+def split_message(content: str, limit: int = 2000) -> list[str]:
+    """Split message content for Discord's character limits"""
+    if len(content) <= limit:
+        return [content]
+
+    print(f"splitting message! original: '''{content}'''")
+
+    parts = []
+    while content:
+        if len(content) <= limit:
+            parts.append(content)
+            break
+
+        # Try to split at last newline before limit
+        split_at = content.rfind('\n', 0, limit)
+
+        # If no newline, try to split at last space
+        if split_at == -1:
+            split_at = content.rfind(' ', 0, limit)
+
+        # If neither newline nor space, hard split at limit
+        if split_at == -1:
+            split_at = limit
+
+        parts.append(content[:split_at].rstrip())
+        content = content[split_at:].lstrip()
+
+    return parts
 
 # Registry for multiple clients
 class ClientRegistry:
