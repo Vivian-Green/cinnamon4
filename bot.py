@@ -1,8 +1,105 @@
+"""
+todo:
+
+
+
+### 1. Message Reply Wrapper
+Add a function to get replied-to messages:
+- **`cinAPI.py`**: Add `get_replied_message()` method to `APIMessage` protocol
+- **`discord_api.py`**: Implement `get_replied_message()` for `DiscordMessage` class
+- Used by bug report plugin to fetch replied messages
+
+
+
+### 2. Bug Report Plugin (`cinBugReport.py`)
+
+Create a new plugin module similar to `cinReminders` with:
+- `!>bugreport` command that logs entire messages to a separate cache
+    - Command behavior:
+      - When used with text: `!>bugreport this is the bug` → logs current message
+      - When used alone while replying: logs the replied-to message instead
+
+- Cache structure:
+```json
+{
+    "reports": [
+        {
+            "time": "unix_timestamp",
+            "user_id": "user_id",
+            "text": "message content after first space",
+            "attachments": ["url1", "url2"],
+            "client_name": "client_name"
+            "status": "string provided buy client",
+            "resolved": true/false
+        },
+        {
+            "time": "unix_timestamp",
+            ...
+        },
+        ...
+    ]
+}
+
+- `!>getbugreports [resolved, unresolved (default), or all]` command that lists all bug reports with the given status
+    - Command behavior:
+      - Lists all bug reports with the given status (resolved or unresolved).
+      - display index, time, text, status, and resolved status
+
+- `!>resolvebugreport <index> <status>` command that marks a bug report as resolved
+- `!>unresolvebugreport <index>` command that marks a bug report as unresolved
+
+- `!>getbugreport <index>` command that shows the details of a specific bug report
+
+
+
+### 3. Error Handling Improvements
+Wrap command/phrase handling to ensure errors reach users:
+- **`bot.py`**: Modify `handlePrompts()` to send errors to channel
+- Current issue: Some errors fail silently (like 400 Bad Request shown)
+- Solution: Add error message sending in exception handlers
+
+
+
+### 4: `!>update` command (pull from github if there is a new version)
+- hard check against my UUID before anything, as this is a command going in core.
+- warn the user, then launch update.sh as a SEPARATE PROCESS, then quit bot:
+- update.sh ~
+    #!/bin/bash
+    cd "$(dirname "$0")"
+
+    echo "Checking for updates..."
+
+    LOCAL=$(git rev-parse HEAD)
+    REMOTE=$(git rev-parse origin/main)
+
+    if [ "$LOCAL" = "$REMOTE" ]; then
+        echo "Bot is up to date! with origin/main"
+    else
+        if git pull --no-rebase; then
+            echo "Successfully updated!"
+        else
+            echo "\n\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!Update failed!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n\n"
+            exit 1
+        fi
+    fi
+    exec python3 bot.py
+- still register command as usual, its handler is just.. going to be in core.
+
+
+
+### 5: `!>next` command in tatoclip: should function as !>getclips [index of first video with no clip]
+- `!>next` command should respond with the URL of the first unprocessed (clipless) video in the playlist.
+
+
+
+"""
+
+
 # bot.py
 import cinIO
 from cinIO import config
 
-cinnamonVersion = "4.1.1"
+cinnamonVersion = "4.1.3"
 description = "Multi-purpose bot that does basically anything I could think of"
 
 debugSettings = {

@@ -25,6 +25,8 @@ def get_default_cache():
 
 # todo: once-over this and all sister files post refactor, lmao
 
+# todo: unset alias is borked?
+
 lastVideoRawIndex = 1
 
 get_links_memo = {}
@@ -571,7 +573,7 @@ async def set_alias(message: cinAPI.APIMessage):
     if not await check_with_err(len(words) >= 2, "Usage: !>setalias <index> <alias> (or none to remove)", message): return
 
     try:
-        effective_index = int(words[1])
+        raw_index = int(words[1])
         alias = " ".join(words[2:]) if len(words) > 2 else None
     except ValueError:
         await message.channel.send("Index must be an integer")
@@ -580,14 +582,14 @@ async def set_alias(message: cinAPI.APIMessage):
     data = await ensure_clip_file_and_load(message, await get_file_path_from_message(message))
     if data is None: return
 
-    raw_index = get_raw_index(data, effective_index)
+    #raw_index = get_raw_index(data, effective_index)
     data = update_alias(data, raw_index, alias)
     save_json_to_filepath(data, clip_file_names[message.channel.name], False)
 
     if alias:
-        await message.channel.send(f"Alias for index {effective_index} set to '{alias}'")
+        await message.channel.send(f"Alias for index {raw_index} set to '{alias}'")
     else:
-        await message.channel.send(f"Alias for index {effective_index} removed")
+        await message.channel.send(f"Alias for index {raw_index} removed")
 
 
 async def set_metadata(message: cinAPI.APIMessage):
