@@ -3,10 +3,11 @@ import difflib
 import time
 import subprocess
 import traceback
+import yt_dlp
+import re
 
 #import discord
 import cinAPI
-from pytube import Playlist
 
 import cinIO
 from cinIO import loadCache
@@ -43,10 +44,38 @@ clip_file_names = {}
 
 async def get_file_path_from_message(message: cinAPI.APIMessage):
     global clip_file_names
-    if message.channel.name not in clip_file_names or not os.path.exists(clip_file_names[message.channel.name]):
-        await message.channel.send("No clip configuration found. Use !>setclipfile to initialize.")
+
+    # already loaded and exists
+    if message.channel.name in clip_file_names and os.path.exists(clip_file_names[message.channel.name]):
+        return clip_file_names[message.channel.name]
+
+    # auto‑discover: try the default filename for this channel
+    guild_id = message.guild.id
+    cache_dir = os.path.join(".", "cache", "tatoclip", str(guild_id))
+    default_filename = f"targets_{message.channel.name}.json".replace("-", "_")
+    filepath = os.path.join(cache_dir, default_filename)
+
+    if os.path.exists(filepath):
+        # attempt to load and validate
+        data = load_clip_file(filepath)
+        if data is not None:
+            valid, msg = validate_project_file(data)
+            if valid:
+                clip_file_names[message.channel.name] = filepath
+                await message.channel.send(f"Auto‑loaded clip configuration from `{filepath}`.")
+                return filepath
+            else:
+                # file exists but is invalid; warn
+                await message.channel.send(f"Clip file `{filepath}` is invalid: {msg}. Use `!>setclipfile` to re‑initialize.")
+                return None
+        else:
+            await message.channel.send(f"Failed to load clip file `{filepath}`. Use `!>setclipfile` to re‑initialize.")
+            return None
+    else:
+        # 404
+        await message.channel.send("No clip configuration found. Use `!>setclipfile` to initialize.")
         return None
-    return clip_file_names[message.channel.name]
+
 
 async def check_with_err(condition: bool, warning: str, message: cinAPI.APIMessage = None):
     if condition: return True
@@ -56,29 +85,85 @@ async def check_with_err(condition: bool, warning: str, message: cinAPI.APIMessa
         print(warning)
     return False
 
-def get_links(url):  # todo: this is already in tatoclip's common.py and has just been accidentally reengineered lmao, use whichever is better for both
-    global get_links_memo
-    global trust_links_memo_timestamp
-    global trust_cache_time_seconds
 
-    # Use memoized result if valid
+def _normalize_playlist_url(url):
+    """Convert a video URL with 'list=' to a pure playlist URL."""
+    match = re.search(r'[&?]list=([^&]+)', url)
+    if match:
+        list_id = match.group(1)
+        return f"https://www.youtube.com/playlist?list={list_id}"
+    return url
+
+def get_links(url):
+    global get_links_memo, trust_links_memo_timestamp, trust_cache_time_seconds
+
+    # Check cache
     if time.time() < trust_links_memo_timestamp and url in get_links_memo:
         result = get_links_memo[url]
-        if result: return result
-
-        print(f"Previously failed to get links for playlist {url}, using cached result of False")
+        if result:
+            return result
+        print(f"Previously failed for {url}, using cached False")
         return False
 
+    # Normalise to a pure playlist URL if possible
+    normalised_url = _normalize_playlist_url(url)
+
+    def _extract(flat=True, target_url=None):
+        if target_url is None:
+            target_url = normalised_url
+        opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'ignoreerrors': True,
+            'extract_flat': flat,
+            'force_generic_extractor': False,
+        }
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            return ydl.extract_info(target_url, download=False)
+
     try:
-        playlist = Playlist(url)
-        links = list(playlist.video_urls)
-        get_links_memo[url] = links
+        # First attempt: fast flat extraction on the normalised URL
+        info = _extract(flat=True)
+        entries = info.get('entries')
+
+        # If still no entries, try full extraction (should rarely happen)
+        if not entries:
+            print(f"No entries with flat extraction, retrying with full extraction for {normalised_url}")
+            info = _extract(flat=False)
+            entries = info.get('entries')
+
+        # Build list of video URLs
+        video_urls = []
+        if entries:
+            for entry in entries:
+                if not entry:
+                    continue
+                vid_url = entry.get('webpage_url') or entry.get('url')
+                if vid_url:
+                    video_urls.append(vid_url)
+                elif entry.get('id'):
+                    video_urls.append(f"https://www.youtube.com/watch?v={entry['id']}")
+        else:
+            # Not a playlist – single video
+            vid_url = info.get('webpage_url') or info.get('url')
+            if vid_url:
+                video_urls = [vid_url]
+            else:
+                raise ValueError("Could not extract any video URL")
+
+        if not video_urls:
+            raise ValueError("No video URLs found")
+
+        # Cache and return
+        get_links_memo[url] = video_urls
         trust_links_memo_timestamp = time.time() + trust_cache_time_seconds
-        return links
+        return video_urls
+
     except Exception as e:
-        print(f"Failed to get links for {url}: {str(e)}")
-        get_links_memo[url] = False
+        print(f"yt-dlp failed for {url}: {str(e)}")
         traceback.print_exc()
+        get_links_memo[url] = False
+        trust_links_memo_timestamp = time.time() + trust_cache_time_seconds
         return False
 
 
@@ -341,7 +426,11 @@ async def get_clips(message: cinAPI.APIMessage):
 
 
 async def get_all_clips(message: cinAPI.APIMessage):
-    data = await ensure_clip_file_and_load(message, await get_file_path_from_message(message))
+    filepath = await get_file_path_from_message(message)
+    if filepath is None:
+        return
+    
+    data = await ensure_clip_file_and_load(message, filepath)
     if data is None:
         return
 
@@ -349,8 +438,12 @@ async def get_all_clips(message: cinAPI.APIMessage):
     videos = data[1:]
     url = metadata.get("url")
     links = get_links(url)
-
-    if not await check_with_err(True and videos, "No clips found.", message): return
+    
+    # early return
+    if not await check_with_err(videos, "No clips found? Videos is false. Idk.", message): return
+    
+    # doesn't need to be an early return, just runs without link building; kinda hacky, but works
+    await check_with_err(url, "No playlist URL configured.", message)
 
     blocks = []
     total_runtime = 0
@@ -479,7 +572,9 @@ async def set_clip_fileW(message: cinAPI.APIMessage, words = None):
 async def set_url(message: cinAPI.APIMessage):
     global clip_file_names
 
-    if not await check_with_err(message.channel.name in clip_file_names,"No clip file configured. Use !>setclipfile first.", message):
+    filepath = await get_file_path_from_message(message) # ensures data exists
+
+    if not await check_with_err(filepath, "No clip file configured. Use !>setclipfile first.", message):
         return False
 
     words = message.content.split()
@@ -487,11 +582,11 @@ async def set_url(message: cinAPI.APIMessage):
         return False
 
     url = words[1]
-    filepath = clip_file_names[message.channel.name]
+    # filepath = clip_file_names[message.channel.name]
 
     try:
         links = get_links(url)
-        if not await check_with_err(links,f"Failed to fetch playlist for {url}. Please check the URL and try again.", message):
+        if not await check_with_err(links, f"Failed to fetch playlist for {url}. Please check the URL and try again.", message):
             return False
 
         data = load_clip_file(filepath)
