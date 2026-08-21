@@ -112,6 +112,7 @@ def hardCodedClientImport(): # todo: replace with discovery in api_contexts, sim
 
 # !!!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[DEFINITIONS & IMPORTS]
 
+import sys
 import os.path
 import traceback
 import time
@@ -473,7 +474,12 @@ def load_plugins():
         cinLogging.printBoxBorderP(LARGE_WINDOW_BORDER)
 
 async def main():
-    os.system("color")
+    if sys.platform == "win32":
+        os.system("color")
+        os.system('mode 140,40')
+    if sys.platform.startswith("linux"):
+        print("\x1b[8;40;140t")
+
     cinLogging.printBoxBorder(0, 130, debugColor)
     print("      bot starting...")
     load_plugins()
